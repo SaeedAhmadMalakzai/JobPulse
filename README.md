@@ -1,6 +1,8 @@
-# Automated CV Submissions
+# JobPulse
 
-Automated job application bot for Afghan job portals: discovers jobs, applies via web forms or email, and notifies you when you get a response (interview/acceptance).
+**Always scanning. Always applying.**
+
+Job application bot for Afghan job portals and LinkedIn: discovers jobs, applies via web forms or email, and notifies you when you get a response (interview/acceptance).
 
 ## Supported Portals
 
@@ -23,7 +25,7 @@ Automated job application bot for Afghan job portals: discovers jobs, applies vi
 ### 1. Clone and install
 
 ```bash
-cd automated-cv-submissions
+cd jobpulse
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
@@ -66,10 +68,10 @@ python -m src.main
 ```bash
 chmod +x scripts/run_cron.sh
 # Crontab entry:
-0 */6 * * * /path/to/automated-cv-submissions/scripts/run_cron.sh >> /path/to/automated-cv-submissions/logs/cron.log 2>&1
+0 */6 * * * /path/to/jobpulse/scripts/run_cron.sh >> /path/to/jobpulse/logs/cron.log 2>&1
 ```
 
-On the VPS: install Python 3, run `pip install -r requirements.txt` and `playwright install chromium`, then create `.env` with your credentials.
+On the VPS: install Python 3, run `pip install -r requirements.txt` and `playwright install chromium`, then create `.env` with your credentials in the project folder.
 
 **List matching, non-expired jobs (no apply):**
 
@@ -94,7 +96,7 @@ python -m src.main --check-responses-only
 ## Project layout
 
 ```
-automated-cv-submissions/
+jobpulse/
 ├── src/
 │   ├── main.py           # Entrypoint
 │   ├── config.py         # Env/config
@@ -120,6 +122,10 @@ automated-cv-submissions/
 - Use a dedicated email for applications and app passwords where possible.
 - The `data/` and `logs/` directories are ignored by Git; they may contain session data and job IDs.
 - See [SECURITY.md](SECURITY.md) for a full guide (users and contributors).
+
+## License
+
+[MIT](LICENSE) – use, modify, and distribute freely. No warranty.
 
 ## Disclaimer
 

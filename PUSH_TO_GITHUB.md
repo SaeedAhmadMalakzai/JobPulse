@@ -1,55 +1,67 @@
-# Push this project to GitHub
+# Push JobPulse to GitHub
 
-Follow these steps to publish **only** this bot (not your whole home folder) as a new GitHub repo.
+## License
 
-## 1. Create a new repo on GitHub
+This project uses the **MIT License** (see [LICENSE](LICENSE)). It allows anyone to use, modify, and distribute the code with minimal restrictions. When you create the repo on GitHub, you can select **MIT** in the "Add a license" dropdown if you create the repo without a README; otherwise the existing `LICENSE` file in this repo will be pushed and GitHub will detect it.
 
-1. Go to [github.com/new](https://github.com/new).
-2. **Repository name:** e.g. `automated-cv-submissions`.
-3. **Description:** e.g. "Automated job application bot for Afghan job portals and LinkedIn".
+---
+
+## 1. Create the repo on GitHub
+
+1. Go to **[github.com/new](https://github.com/new)**.
+2. **Repository name:** `jobpulse` (or whatever you prefer).
+3. **Description:** e.g. *JobPulse – Always scanning. Always applying. Automated job application bot for Afghan job portals and LinkedIn.*
 4. Choose **Public**.
-5. **Do not** check "Add a README" (you already have one).
-6. Click **Create repository**.
+5. **Do not** check "Add a README" or "Add .gitignore" (this repo already has them).
+6. **License:** Choose **MIT License** if the dropdown appears (or leave empty; the repo already contains a `LICENSE` file).
+7. Click **Create repository**.
 
-## 2. Initialize Git in this folder and push
+---
 
-Open a terminal, go to this project folder, then run:
+## 2. Add remote and push
+
+Open a terminal in the project folder:
 
 ```bash
 cd /Users/saeedahmadmalakzai/automated-cv-submissions
 
-# Make this folder its own Git repo (only this project)
-git init
-
-# Confirm .env is ignored (should print a .gitignore line)
-git check-ignore -v .env
-
-# Stage everything ( .env, data/, logs/ are ignored)
-git add .
-
-# See what will be committed (no .env, no data/)
+# If you haven’t committed the new LICENSE yet:
+git add LICENSE
+git add -u
 git status
+git commit -m "Add MIT license"
 
-# First commit
-git commit -m "Initial commit: automated CV submission bot"
+# Add your GitHub repo (replace YOUR_USERNAME with your GitHub username)
+git remote add origin https://github.com/YOUR_USERNAME/jobpulse.git
 
-# Add your GitHub repo as remote (replace YOUR_USERNAME and REPO_NAME with yours)
-git remote add origin https://github.com/YOUR_USERNAME/automated-cv-submissions.git
-
-# Or if you use SSH:
-# git remote add origin git@github.com:YOUR_USERNAME/automated-cv-submissions.git
-
-# Push (set upstream branch)
-git branch -M main
+# Push
 git push -u origin main
 ```
 
-## 3. Before pushing: double-check
+If you already added `origin` before, use:
 
-- Run `git status` and make sure **`.env` does not appear** in the list of files to be committed.
-- If `.env` appears, **do not commit**. Run `git reset HEAD .env` and confirm `.env` is in `.gitignore`.
+```bash
+git remote set-url origin https://github.com/YOUR_USERNAME/jobpulse.git
+git push -u origin main
+```
 
-## 4. After the first push
+**Using SSH instead of HTTPS:**
 
-- You can remove this file if you want: `rm PUSH_TO_GITHUB.md`
-- To update the repo later: `git add .` → `git commit -m "Your message"` → `git push`
+```bash
+git remote add origin git@github.com:YOUR_USERNAME/jobpulse.git
+git push -u origin main
+```
+
+---
+
+## 3. Safety check before push
+
+- Run `git status` and confirm **`.env` does not appear** in the list.
+- If `.env` is listed, **do not push**. Run `git reset HEAD .env` and ensure `.env` is in `.gitignore`.
+
+---
+
+## 4. After pushing
+
+- Later updates: `git add .` → `git commit -m "Your message"` → `git push`
+- To change the license in the future, edit `LICENSE` and push again.
