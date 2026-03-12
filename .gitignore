@@ -1,0 +1,32 @@
+# Secrets and local config — NEVER commit
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+secrets/
+*.pem
+*.key
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs and runtime data (may contain URLs/job IDs)
+*.log
+logs/
+data/
+playwright-report/
+test-results/
+
+# Resume/attachments (often personal)
+*.pdf
+!cv.pdf
+!cover_letter.pdf
+
+# OS / editor
+.DS_Store
+Thumbs.db

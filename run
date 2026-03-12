@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Run the bot using the project venv (so Playwright and deps are found)
+cd "$(dirname "$0")"
+exec .venv/bin/python -m src.main "$@"
