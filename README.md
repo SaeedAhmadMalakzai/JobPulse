@@ -4,6 +4,45 @@
 
 Job application bot for Afghan job portals and LinkedIn: discovers jobs, applies via web forms or email, and notifies you when you get a response (interview/acceptance).
 
+---
+
+## Download & run
+
+### For everyone: .exe and .dmg (no terminal needed)
+
+Pre-built installers let you **download, install, and run** without Python or the terminal:
+
+- **Windows:** Download **JobPulse-win64.zip** from the [Releases](https://github.com/SaeedAhmadMalakzai/JobPulse/releases) page. Unzip, copy `.env.example` to `.env` in the same folder as `JobPulse.exe`, edit `.env` with your details, then double‑click **JobPulse.exe**.
+- **Mac:** Download **JobPulse-mac.dmg**, open it, drag **JobPulse** to Applications. On first run the app creates a config folder and `.env` at `~/Library/Application Support/JobPulse`; edit `.env` there with your details, then open **JobPulse** from Applications.
+
+The first run may download Chromium once (~150 MB). Full step‑by‑step instructions: **[INSTALL.md](INSTALL.md)**.
+
+---
+
+### Option A: Run from terminal (developers)
+
+You need **Python 3.10+**. Clone or [download the repo](https://github.com/SaeedAhmadMalakzai/JobPulse/archive/refs/heads/main.zip), then:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+playwright install chromium
+cp .env.example .env               # then edit .env
+python -m src.gui                  # or: ./run_gui
+```
+
+### Option B: Build .exe / .app yourself
+
+From the project root with venv active:
+
+- **Windows:** `scripts\build_windows.bat` → `dist\JobPulse\JobPulse.exe` and `dist\JobPulse-win64.zip`.
+- **Mac:** `./scripts/build_mac.sh` → `dist/JobPulse.app` and `dist/JobPulse-mac.dmg`.
+
+All credentials and personal data go in `.env` only (never in the repo).
+
+---
+
 ## Supported Portals
 
 - [ACBAR](https://www.acbar.org/) – Job Centre & Application Form
@@ -57,7 +96,15 @@ Resume path is set in `.env` (`CV_PATH`). Cover letters are **generated per job*
 
 ## Running
 
-**One-off run (discover → apply → check responses → send alerts):**
+**GUI (recommended for non-technical users):**
+
+```bash
+python -m src.gui
+```
+
+Opens a desktop window: Dashboard (Start/Stop), Keywords, Accounts, and Settings tabs, plus a colored **Activity** panel and **Results** (Applied / Skipped lists when a run finishes). Edit values and click Save per tab, then Start to run the bot. On first run, the app can install dependencies automatically. See [GUI_TIPS.md](GUI_TIPS.md) for tips and suggestions.
+
+**One-off run from terminal (discover → apply → check responses → send alerts):**
 
 ```bash
 python -m src.main
@@ -93,13 +140,23 @@ python -m src.main --check-responses-only
 
 **CAPTCHA:** If an application form shows reCAPTCHA or similar, the bot will try to submit but may be blocked. For full automation on such forms you’d need a CAPTCHA-solving API (e.g. 2Captcha); add `CAPTCHA_API_KEY` in `.env` when supported.
 
+## Building the app (executable)
+
+Use the provided scripts to build a distributable .exe (Windows) or .app/.dmg (Mac):
+
+- **Windows:** Run `scripts\build_windows.bat` (with venv active). Output: `dist\JobPulse\` and `dist\JobPulse-win64.zip`.
+- **Mac:** Run `./scripts/build_mac.sh`. Output: `dist/JobPulse.app` and `dist/JobPulse-mac.dmg`.
+
+Or build manually: `pip install pyinstaller` then `pyinstaller jobpulse.spec`. On first run, the app will download Chromium once if needed. Build on each OS for a native build. Do not commit `build/` or `dist/`.
+
 ## Project layout
 
 ```
 jobpulse/
 ├── src/
-│   ├── main.py           # Entrypoint
+│   ├── main.py           # CLI entrypoint
 │   ├── config.py         # Env/config
+│   ├── gui/              # Desktop GUI (PySide6)
 │   ├── email_utils.py    # SMTP send + IMAP inbox check
 │   ├── alerts.py         # Send "response detected" to you
 │   └── sites/
@@ -116,12 +173,16 @@ jobpulse/
 └── README.md
 ```
 
-## Security
+## Security & pushing to GitHub
 
-- **Secrets only in `.env`.** Store all passwords, API keys, and personal details in `.env`. Never commit `.env` (it is in `.gitignore`). Use `.env.example` as a template with placeholders only.
+- **No credentials or personal data are in the repository.** All secrets (emails, passwords, API keys, names, phone numbers) live only in `.env`, which is in `.gitignore` and is never committed. The codebase and `.env.example` contain only placeholders (e.g. `your-application-email@gmail.com`).
+- **Before you push:** Run `git status` and ensure `.env` and `data/` are not staged. If they are, unstage them. Never commit `.env` or PDFs (CV/cover letter).
 - Use a dedicated email for applications and app passwords where possible.
-- The `data/` and `logs/` directories are ignored by Git; they may contain session data and job IDs.
 - See [SECURITY.md](SECURITY.md) for a full guide (users and contributors).
+
+## Further improvements
+
+Ideas for packaging, UX, and features (onboarding, auto-update, more portals, etc.) are in [IMPROVEMENTS.md](IMPROVEMENTS.md).
 
 ## License
 

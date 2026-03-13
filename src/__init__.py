@@ -1,1 +1,1 @@
-# Automated CV Submissions
+# JobPulse – automated job application bot

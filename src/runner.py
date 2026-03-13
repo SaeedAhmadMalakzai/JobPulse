@@ -16,6 +16,8 @@ from src.config import (
     APPLY_ATTEMPT_TIMEOUT_SEC,
     LINKEDIN_APPLY_TIMEOUT_SEC,
     MAX_JOB_AGE_DAYS,
+    MAX_APPLICATIONS_PER_RUN,
+    DRY_RUN,
 )
 from src.applied_store import load_applied_ids, load_applied_keys, mark_applied
 from src.applied_store import _normalize_key as _job_key
@@ -152,14 +154,27 @@ def run_discover_and_apply() -> dict:
                 per_adapter[adapter.name] = {"discovered": 0, "applied": 0, "skipped": 0, "errors": 1}
                 stats["errors"] += 1
 
+    # Dry run: discover only, do not apply
+    if DRY_RUN:
+        LOG.info("Dry run: discovery complete. Skipping applications.")
+        stats["per_adapter"] = per_adapter
+        return stats
+
     # Apply sequentially (rate limit, dedupe)
+    limit_reached = False
     for a in adapters:
+        if limit_reached:
+            break
         if a.name not in adapter_to_jobs:
             continue
         adapter, jobs = adapter_to_jobs[a.name]
         if APPLY_LOCAL_FIRST:
             jobs = sorted(jobs, key=job_scope_priority)
         for job in jobs:
+            if MAX_APPLICATIONS_PER_RUN and stats["applied"] >= MAX_APPLICATIONS_PER_RUN:
+                LOG.info("Reached application limit (%s). Stopping.", MAX_APPLICATIONS_PER_RUN)
+                limit_reached = True
+                break
             if not should_apply_by_scope(job, APPLY_GLOBAL_REMOTE, APPLY_OTHER_REGIONS):
                 per_adapter[adapter.name]["skipped"] += 1
                 stats["skipped"] += 1

@@ -76,3 +76,10 @@ def mark_applied(job_id: str, site: str, title: str = "", company: str = "") -> 
 def save_applied_id(job_id: str, site: str) -> None:
     """Backward-compat: mark applied without title/company (no dedupe key)."""
     mark_applied(job_id, site, "", "")
+
+
+def clear_applied_history() -> None:
+    """Clear all applied job history (allows re-applying to same jobs)."""
+    ensure_dirs()
+    data = {"entries": [], "updated": datetime.now(timezone.utc).isoformat()}
+    APPLIED_FILE.write_text(json.dumps(data, indent=2))
