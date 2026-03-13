@@ -147,7 +147,7 @@ Use the provided scripts to build a distributable .exe (Windows) or .app/.dmg (M
 - **Windows:** Run `scripts\build_windows.bat` (with venv active). Output: `dist\JobPulse\` and `dist\JobPulse-win64.zip`.
 - **Mac:** Run `./scripts/build_mac.sh`. Output: `dist/JobPulse.app` and `dist/JobPulse-mac.dmg`.
 
-Or build manually: `pip install pyinstaller` then `pyinstaller jobpulse.spec`. On first run, the app will download Chromium once if needed. Build on each OS for a native build. Do not commit `build/` or `dist/`.
+Or build manually: `pip install pyinstaller` then `pyinstaller jobpulse.spec`. The project uses **PySide6-Essentials** and spec excludes unused stdlib/Qt to keep the Mac .dmg ~90 MB (download). On first run, the app downloads Chromium once if needed. Build on each OS for a native build. Do not commit `build/` or `dist/`.
 
 ## Project layout
 

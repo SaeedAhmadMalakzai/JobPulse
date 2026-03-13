@@ -1,7 +1,7 @@
-# JobPulse
+# JobPulse (use PySide6-Essentials for smaller GUI builds; full PySide6 also works)
 python-dotenv>=1.0.0
 playwright>=1.40.0
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
-PySide6>=6.5.0
+PySide6-Essentials>=6.5.0
