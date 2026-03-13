@@ -1,6 +1,6 @@
 # Security
 
-This document explains how to keep your credentials and personal data safe when using or contributing to this project.
+This document explains how to keep your credentials and personal data safe when using or contributing to JobPulse.
 
 ## For users (running the bot)
 
@@ -25,6 +25,13 @@ This document explains how to keep your credentials and personal data safe when 
 - **Default config values.** `src/config.py` uses empty or generic defaults for all user-specific settings so that nothing sensitive appears if someone runs the app without a `.env` file.
 
 - **Cover letters and bio.** Cover letter text (including university and previous employer) is driven by env vars `COVER_LETTER_UNIVERSITY`, `COVER_LETTER_PREVIOUS_ORGANIZATION`, and the usual applicant details. No real names or contact details are hardcoded in `cover_letter.py`.
+
+## Before pushing to GitHub
+
+- Run `git status` and ensure **`.env` is not staged**. If it appears, run `git restore --staged .env` and keep `.env` only on your machine.
+- Ensure **`data/`** is not staged (it is in `.gitignore`; if you added it earlier, unstage and do not commit).
+- Do not commit **PDFs** (CV, cover letter); they are ignored via `*.pdf` in `.gitignore`.
+- `.env.example` is safe to commit (placeholders only). Never commit `.env`.
 
 ## If you accidentally committed secrets
 

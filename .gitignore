@@ -22,10 +22,12 @@ data/
 playwright-report/
 test-results/
 
-# Resume/attachments (often personal)
+# Resume/attachments (never commit personal CVs or cover letters)
 *.pdf
-!cv.pdf
-!cover_letter.pdf
+
+# PyInstaller
+build/
+dist/
 
 # OS / editor
 .DS_Store

@@ -22,7 +22,7 @@ def _write_last_run(stats: dict) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Automated CV submissions bot")
+    parser = argparse.ArgumentParser(description="JobPulse – automated job application bot")
     parser.add_argument(
         "--check-responses-only",
         action="store_true",

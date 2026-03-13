@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Run the JobPulse GUI using the project venv
+cd "$(dirname "$0")"
+exec .venv/bin/python -m src.gui "$@"

@@ -1,11 +1,24 @@
 """Load configuration from environment."""
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-_ROOT = Path(__file__).resolve().parent.parent
+if getattr(sys, "frozen", False):
+    _exe = Path(sys.executable).resolve()
+    if sys.platform == "darwin" and _exe.parent.name == "MacOS" and "Contents" in str(_exe.parent.parent):
+        _ROOT = Path.home() / "Library" / "Application Support" / "JobPulse"
+        _ROOT.mkdir(parents=True, exist_ok=True)
+    else:
+        _ROOT = _exe.parent
+else:
+    _ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(_ROOT / ".env")
+# When run from GUI subprocess (e.g. frozen), cwd may be set to executable dir; load .env there too
+_env_cwd = Path.cwd() / ".env"
+if _env_cwd.exists():
+    load_dotenv(_env_cwd)
 
 
 def _get(key: str, default: str = "") -> str:
@@ -109,6 +122,12 @@ CAPTCHA_API_KEY = _get("CAPTCHA_API_KEY")
 
 # Optional: run only these adapters
 ADAPTERS_FILTER = [n.strip().lower() for n in _get("ADAPTERS", "").split(",") if n.strip()]
+
+# Optional: max applications per run (0 = no limit)
+MAX_APPLICATIONS_PER_RUN = _get_int("MAX_APPLICATIONS_PER_RUN", 0)
+
+# Dry run: discover only, do not apply (set by GUI or env)
+DRY_RUN = _get_bool("DRY_RUN", False)
 
 # Paths
 DATA_DIR = _ROOT / "data"
