@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Build JobPulse for macOS. Run from project root with venv active.
+# For a smaller bundle (~70–90 MB), use only PySide6-Essentials:
+#   pip uninstall PySide6 2>/dev/null; pip install PySide6-Essentials
 # Output: dist/JobPulse.app and JobPulse-mac.dmg
 
 set -e
@@ -24,4 +26,6 @@ cp -R dist/JobPulse.app "$VOL_PATH/"
 ln -s /Applications "$VOL_PATH/Applications"
 hdiutil create -volname "JobPulse" -srcfolder "$VOL_PATH" -ov -format UDZO "dist/${DMG_NAME}"
 rm -rf "$VOL_PATH"
-echo "Done. App: dist/JobPulse.app  |  DMG: dist/${DMG_NAME}"
+SIZE_APP=$(du -sh "dist/JobPulse.app" 2>/dev/null | cut -f1)
+SIZE_DMG=$(du -sh "dist/${DMG_NAME}" 2>/dev/null | cut -f1)
+echo "Done. App: dist/JobPulse.app (${SIZE_APP})  |  DMG: dist/${DMG_NAME} (${SIZE_DMG})"

@@ -1,18 +1,24 @@
 # PyInstaller spec for JobPulse (GUI + bot). Build: pyinstaller jobpulse.spec
-# Output: dist/JobPulse/ (Windows/Linux) or dist/JobPulse.app (macOS). One-folder so Playwright can install Chromium next to app.
+# Use a clean venv with only requirements.txt (PySide6-Essentials) to avoid full PySide6 (~126 MB).
 
 import sys
 
 block_cipher = None
 
-# Collect all of src so that --run-bot (same executable) can import src.main and all adapters
+# Exclude unused stdlib and heavy optional deps (do not exclude distutils — setuptools hook needs it)
+_excludes_stdlib = [
+    'tkinter', 'test', 'unittest', 'ensurepip', 'lib2to3',
+    'pydoc', 'idlelib',
+    'IPython', 'numpy', 'pygments', 'pytest', 'sphinx', 'PIL', 'matplotlib', 'pandas',
+]
+
 a = Analysis(
     ['src/gui/__main__.py'],
     pathex=[],
     binaries=[],
     datas=[
         ('.env.example', '.'),
-    ] + Tree('src', prefix='src', excludes=['__pycache__', '*.pyc']),
+    ],
     hiddenimports=[
         'src.main',
         'src.config',
@@ -37,12 +43,25 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=_excludes_stdlib,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
 )
+
+# Drop unused Qt libs (we only need Core, Gui, Widgets, Network for SSL/QProcess)
+_qt_skip = (
+    'Qt6Svg', 'Qt6Sql', 'Qt6Test', 'Qt6Xml', 'Qt6Help', 'Qt6Designer', 'Qt6Qml', 'Qt6Quick',
+    'Qt63D', 'Qt6Multimedia', 'Qt6Positioning', 'Qt6Location', 'Qt6Sensors', 'Qt6SerialPort',
+    'Qt6WebEngine', 'Qt6Charts', 'Qt6DataVisualization', 'Qt6Bluetooth', 'Qt6Nfc',
+    'Qt6RemoteObjects', 'Qt6Scxml', 'Qt6StateMachine', 'Qt6Pdf', 'Qt6ShaderTools', 'Qt6UiTools',
+    'Qt6WebChannel', 'Qt6WebSockets', 'Qt6HttpServer',
+)
+def _keep_binary(bin_item):
+    dest = bin_item[0] if isinstance(bin_item[0], str) else ''
+    return not any(skip in dest for skip in _qt_skip)
+a.binaries = [x for x in a.binaries if _keep_binary(x)]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
@@ -69,7 +88,7 @@ coll = COLLECT(
     a.binaries,
     a.zipfiles,
     a.datas,
-    strip=False,
+    strip=True,
     upx=True,
     upx_exclude=[],
     name='JobPulse',
