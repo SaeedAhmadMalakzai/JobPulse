@@ -69,4 +69,5 @@ class KabulJobsAdapter(SiteAdapter):
             cover_letter_path,
             skip_domains=["kabuljobs.com"],
             adapter_name=self.name,
+            vacancy_number=job.vacancy_number,
         )

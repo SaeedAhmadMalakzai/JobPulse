@@ -771,24 +771,28 @@ class LinkedInJobsAdapter(SiteAdapter):
             html = page.content()
             to_email, _ = extract_apply_from_page(html)
             if to_email:
-                body = f"Application for: {job.title}\n\nPlease find my CV and cover letter attached."
-                if cover_letter_path and Path(cover_letter_path).exists():
-                    body = Path(cover_letter_path).read_text(encoding="utf-8")
+                from src.apply_helper import _pick_cv, _build_email_body, _build_email_subject
+                email_cv = _pick_cv(Path(cv_path), for_email=True)
+                body = _build_email_body(job.title, cover_letter_path, job.vacancy_number)
+                subject = _build_email_subject(job.title, job.vacancy_number)
                 ext_context.close()
                 ok = send_application_email(
-                    to_email, f"Application: {job.title}", body,
-                    cv_path=Path(cv_path),
+                    to_email, subject, body,
+                    cv_path=email_cv,
                     cover_letter_path=Path(cover_letter_path) if cover_letter_path else None,
                 )
                 if ok:
                     LOG.info("  [linkedin] External applied via email to %s for: %s", to_email, job.title[:40])
                 return ok
+            from src.apply_helper import _pick_cv as _pck
+            form_cv = _pck(Path(cv_path), for_email=False)
             ok = fill_and_submit_form_on_page(
                 page, job_title=job.title,
-                cv_path=Path(cv_path),
+                cv_path=form_cv,
                 cover_letter_path=Path(cover_letter_path) if cover_letter_path else None,
                 applicant_name=SMTP_FROM_NAME, applicant_email=SMTP_USER,
                 form_url=apply_url,
+                vacancy_number=job.vacancy_number,
             )
             ext_context.close()
             if ok:

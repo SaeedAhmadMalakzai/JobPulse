@@ -1,4 +1,5 @@
 """Read and write .env file for the GUI. Preserves keys not managed by the GUI."""
+import os
 import re
 import shutil
 import sys
@@ -97,3 +98,8 @@ def save_env(updates: dict) -> None:
             lines_out.append(f"{key}={val}")
     env_file.parent.mkdir(parents=True, exist_ok=True)
     env_file.write_text("\n".join(lines_out) + "\n", encoding="utf-8")
+    # .env holds passwords/tokens — restrict to owner-only (best effort; no-op on Windows)
+    try:
+        os.chmod(env_file, 0o600)
+    except (OSError, NotImplementedError):
+        pass

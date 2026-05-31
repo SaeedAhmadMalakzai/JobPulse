@@ -54,20 +54,21 @@ class UnjobsAdapter(SiteAdapter):
         return matches_job_keywords(job.title, job.company, JOB_KEYWORDS, JOB_EXCLUDE_KEYWORDS)
 
     def apply(self, job: JobListing, cv_path: str, cover_letter_path: Optional[str] = None) -> bool:
+        from pathlib import Path
+        from src.apply_helper import _pick_cv, _build_email_body, _build_email_subject
+
         if job.apply_by_email:
-            from pathlib import Path
             from src.email_utils import send_application_email
-            body = f"Application for: {job.title}\n\nPlease find my CV and cover letter attached."
-            if cover_letter_path and Path(cover_letter_path).exists():
-                body = Path(cover_letter_path).read_text(encoding="utf-8")
+            email_cv = _pick_cv(Path(cv_path), for_email=True)
+            body = _build_email_body(job.title, cover_letter_path, job.vacancy_number)
+            subject = _build_email_subject(job.title, job.vacancy_number)
             return send_application_email(
-                job.apply_by_email, f"Application: {job.title}", body,
-                cv_path=Path(cv_path),
+                job.apply_by_email, subject, body,
+                cv_path=email_cv,
                 cover_letter_path=Path(cover_letter_path) if cover_letter_path else None,
             )
 
         from playwright.sync_api import sync_playwright
-        from pathlib import Path
         from src.job_page_utils import extract_apply_from_page
 
         try:
@@ -83,13 +84,13 @@ class UnjobsAdapter(SiteAdapter):
 
                 if to_email:
                     from src.email_utils import send_application_email
-                    body = f"Application for: {job.title}\n\nPlease find my CV and cover letter attached."
-                    if cover_letter_path and Path(cover_letter_path).exists():
-                        body = Path(cover_letter_path).read_text(encoding="utf-8")
+                    email_cv = _pick_cv(Path(cv_path), for_email=True)
+                    body = _build_email_body(job.title, cover_letter_path, job.vacancy_number)
+                    subject = _build_email_subject(job.title, job.vacancy_number)
                     browser.close()
                     ok = send_application_email(
-                        to_email, f"Application: {job.title}", body,
-                        cv_path=Path(cv_path),
+                        to_email, subject, body,
+                        cv_path=email_cv,
                         cover_letter_path=Path(cover_letter_path) if cover_letter_path else None,
                     )
                     if ok:
@@ -123,6 +124,7 @@ class UnjobsAdapter(SiteAdapter):
                     return apply_via_browser(
                         source_link, job.title, cv_path, cover_letter_path,
                         skip_domains=["unjobs.org"], adapter_name=self.name,
+                        vacancy_number=job.vacancy_number,
                     )
 
                 LOG.info("  [unjobs] No apply email or source link found for: %s", job.title[:50])

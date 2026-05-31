@@ -19,6 +19,7 @@ class JobListing:
     apply_url: Optional[str] = None
     close_date: Optional[str] = None
     posted_date: Optional[str] = None   # ISO "YYYY-MM-DD" or relative like "2 days ago"
+    vacancy_number: Optional[str] = None
     raw: Optional[dict] = None
 
 

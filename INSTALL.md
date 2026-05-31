@@ -76,7 +76,7 @@ They are in **~/Library/Application Support/JobPulse** (your data and `.env` sta
   If Windows blocks the .exe, choose “More info” → “Run anyway.” The app is open source; you can build it yourself from the GitHub repo.
 
 - **Mac “unidentified developer”**  
-  Right‑click **JobPulse** → **Open** → **Open** in the dialog. You only need to do this once.
+  The app is not code-signed. Right‑click **JobPulse** → **Open** → **Open** in the dialog. You only need to do this once. If it still says damaged: open **Terminal**, run `xattr -cr /Applications/JobPulse.app`, then open JobPulse again.
 
 ---
 

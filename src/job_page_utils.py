@@ -57,6 +57,28 @@ def extract_apply_url(html: str, skip_domains: Optional[list] = None) -> Optiona
     return None
 
 
+def extract_vacancy_number(html: str) -> Optional[str]:
+    """Extract vacancy/reference number from job page HTML.
+    Looks for patterns like 'Vacancy Number: ABC-123' or 'Reference No: 456'.
+    """
+    text = html_module.unescape(re.sub(r"<[^>]+>", " ", html))
+    patterns = [
+        r"(?:vacancy\s*(?:number|no\.?|#|id)\s*[:\-]\s*)([A-Za-z0-9\-/_.]+)",
+        r"(?:reference\s*(?:number|no\.?|#|id)\s*[:\-]\s*)([A-Za-z0-9\-/_.]+)",
+        r"(?:ref\.?\s*(?:number|no\.?|#)?\s*[:\-]\s*)([A-Za-z0-9\-/_.]+)",
+        r"(?:position\s*(?:number|no\.?|#)\s*[:\-]\s*)([A-Za-z0-9\-/_.]+)",
+        r"(?:job\s*(?:number|no\.?|#|id|code)\s*[:\-]\s*)([A-Za-z0-9\-/_.]+)",
+        r"(?:announcement\s*(?:number|no\.?|#)\s*[:\-]\s*)([A-Za-z0-9\-/_.]+)",
+    ]
+    for pat in patterns:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            val = m.group(1).strip().rstrip(".,;)")
+            if len(val) >= 2:
+                return val
+    return None
+
+
 def extract_apply_from_page(html: str, skip_domains: Optional[list] = None) -> Tuple[Optional[str], Optional[str]]:
     """Return (apply_email, apply_url). One or both may be None."""
     email = extract_apply_email(html, skip_domains)

@@ -8,6 +8,8 @@ from typing import Dict, List, Tuple
 from src.config import (
     ensure_dirs,
     CV_PATH,
+    CV_PATH_EMAIL,
+    CV_PATH_FORM,
     COVER_LETTER_PATH,
     ADAPTERS_FILTER,
     APPLY_LOCAL_FIRST,
@@ -123,9 +125,14 @@ def run_discover_and_apply() -> dict:
     applied = load_applied_ids()
     applied_keys = load_applied_keys()
     applied_urls_this_run: set = set()  # avoid applying twice to same URL in one run
+    cv_email = str(CV_PATH_EMAIL) if CV_PATH_EMAIL and CV_PATH_EMAIL.exists() else str(CV_PATH)
+    cv_form = str(CV_PATH_FORM) if CV_PATH_FORM and CV_PATH_FORM.exists() else str(CV_PATH)
     cv = str(CV_PATH)
-    if not CV_PATH.exists():
-        return {"discovered": 0, "applied": 0, "skipped": 0, "errors": 0, "per_adapter": {}}
+    has_cv = CV_PATH.exists() or (
+        bool(CV_PATH_EMAIL) and CV_PATH_EMAIL.exists()
+    ) or (
+        bool(CV_PATH_FORM) and CV_PATH_FORM.exists()
+    )
 
     adapters = _get_adapters()
     stats = {"discovered": 0, "applied": 0, "skipped": 0, "errors": 0, "per_adapter": {}}
@@ -157,6 +164,11 @@ def run_discover_and_apply() -> dict:
     # Dry run: discover only, do not apply
     if DRY_RUN:
         LOG.info("Dry run: discovery complete. Skipping applications.")
+        stats["per_adapter"] = per_adapter
+        return stats
+
+    if not has_cv:
+        LOG.warning("No CV at CV_PATH (or alternates). Skipping applications; discovery totals are above.")
         stats["per_adapter"] = per_adapter
         return stats
 

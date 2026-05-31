@@ -48,6 +48,57 @@ from src.gui.output_formatter import parse_log_line, extract_applied_and_skipped
 from src.gui.run_history import save_last_run, load_last_run, load_run_history
 
 
+def _frozen_playwright_browser_dir(root: Path) -> Path | None:
+    """Directory for PLAYWRIGHT_BROWSERS_PATH when frozen, or None for Playwright default cache.
+
+    Terminal `playwright install chromium` uses ~/Library/Caches/ms-playwright on macOS.
+    Older JobPulse builds used Application Support/.../playwright-browsers; keep using that
+    if Chromium is already there.
+    """
+    local = root / "playwright-browsers"
+    try:
+        if local.is_dir() and any(
+            p.is_dir() and p.name.startswith("chromium") for p in local.iterdir()
+        ):
+            return local
+    except OSError:
+        pass
+    if sys.platform == "darwin":
+        return None
+    return local
+
+
+def _set_process_playwright_browsers_path(proc_env: QProcessEnvironment, root: Path) -> None:
+    """Ensure bot subprocess sees the same browser location as the GUI install step."""
+    if not getattr(sys, "frozen", False):
+        return
+    bd = _frozen_playwright_browser_dir(root)
+    proc_env.remove("PLAYWRIGHT_BROWSERS_PATH")
+    if bd is not None:
+        bd.mkdir(parents=True, exist_ok=True)
+        proc_env.insert("PLAYWRIGHT_BROWSERS_PATH", str(bd))
+
+
+def _install_playwright_chromium_via_driver() -> None:
+    """Install Chromium using Playwright's Node driver (PyInstaller has no playwright.__main__)."""
+    from playwright._impl._driver import compute_driver_executable, get_driver_env
+
+    driver_executable, cli_path = compute_driver_executable()
+    env = get_driver_env()
+    r = subprocess.run(
+        [driver_executable, cli_path, "install", "chromium"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+    if r.returncode != 0:
+        tail = (r.stderr or r.stdout or "").strip()
+        if len(tail) > 400:
+            tail = tail[:400] + "…"
+        raise RuntimeError(tail or f"playwright install exited {r.returncode}")
+
+
 class InstallDepsThread(QThread):
     """Run pip + playwright (dev) or playwright only (frozen) in background."""
     line_ready = Signal(str)
@@ -59,28 +110,31 @@ class InstallDepsThread(QThread):
         self._python = python_exe
 
     def run(self) -> None:
-        import runpy
         ok = True
         if getattr(sys, "frozen", False):
-            # Standalone .exe/.app: install Chromium next to the app (one-time download)
-            browser_dir = self._root / "playwright-browsers"
+            browser_dir = _frozen_playwright_browser_dir(self._root)
             try:
-                browser_dir.mkdir(parents=True, exist_ok=True)
-                os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browser_dir)
-                self.line_ready.emit("Downloading Chromium (one-time, ~150 MB)…")
-                old_argv = list(sys.argv)
-                sys.argv = ["playwright", "install", "chromium"]
+                if browser_dir is not None:
+                    browser_dir.mkdir(parents=True, exist_ok=True)
+                    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browser_dir)
+                else:
+                    os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
                 try:
-                    runpy.run_module("playwright", run_name="__main__")
-                finally:
-                    sys.argv = old_argv
-                self.line_ready.emit("Chromium ready.")
+                    from playwright.sync_api import sync_playwright
+
+                    with sync_playwright() as p:
+                        br = p.chromium.launch(headless=True)
+                        br.close()
+                    self.line_ready.emit("Chromium ready.")
+                except Exception:
+                    self.line_ready.emit("Downloading Chromium (one-time, ~150 MB)…")
+                    _install_playwright_chromium_via_driver()
+                    self.line_ready.emit("Chromium ready.")
             except Exception as e:
                 self.line_ready.emit(f"Download failed: {e}")
                 ok = False
             self.finished_ok.emit(ok)
             return
-        import subprocess
         try:
             self.line_ready.emit("Installing Python dependencies (first run)...")
             r = subprocess.run(
@@ -210,6 +264,9 @@ class MainWindow(QMainWindow):
         self._text_color = self._TEXT_COLOR_LIGHT
 
         self.setWindowTitle("JobPulse")
+        from src.gui.assets import app_icon
+        self._app_icon = app_icon()
+        self.setWindowIcon(self._app_icon)
         self.setMinimumSize(780, 500)
         self.resize(880, 540)
 
@@ -433,7 +490,11 @@ class MainWindow(QMainWindow):
         from PySide6.QtGui import QIcon, QAction
         from PySide6.QtWidgets import QSystemTrayIcon, QMenu
         self._tray = QSystemTrayIcon(self)
-        self._tray.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_ComputerIcon))
+        tray_icon = getattr(self, "_app_icon", None)
+        if tray_icon is not None and not tray_icon.isNull():
+            self._tray.setIcon(tray_icon)
+        else:
+            self._tray.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_ComputerIcon))
         menu = QMenu()
         run_act = QAction("▶  Run now", self)
         run_act.triggered.connect(self._on_start)
@@ -1606,9 +1667,7 @@ class MainWindow(QMainWindow):
         if cv_path:
             proc_env.insert("CV_PATH", cv_path)
         proc_env.insert("DRY_RUN", "1" if self._dry_run_cb.isChecked() else "0")
-        if getattr(sys, "frozen", False):
-            browser_dir = root / "playwright-browsers"
-            proc_env.insert("PLAYWRIGHT_BROWSERS_PATH", str(browser_dir))
+        _set_process_playwright_browsers_path(proc_env, root)
         self._process.setProcessEnvironment(proc_env)
 
         if getattr(sys, "frozen", False):

@@ -57,4 +57,5 @@ class DaAfghanistanBankAdapter(SiteAdapter):
         return apply_via_browser(
             job.url, job.title, cv_path, cover_letter_path,
             skip_domains=["dab.gov.af"], adapter_name=self.name,
+            vacancy_number=job.vacancy_number,
         )

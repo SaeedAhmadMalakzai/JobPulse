@@ -379,6 +379,7 @@ def fill_and_submit_form_on_page(
     applicant_name: Optional[str] = None,
     applicant_email: Optional[str] = None,
     form_url: Optional[str] = None,
+    vacancy_number: Optional[str] = None,
 ) -> bool:
     """
     Fill applicant details and submit on an already-loaded page.
@@ -462,6 +463,21 @@ def fill_and_submit_form_on_page(
                     pos_inp.fill(job_title[:200])
             except Exception:
                 pass
+
+            # Fill vacancy / reference number
+            if vacancy_number:
+                try:
+                    vac_inp = page.query_selector(
+                        'input[placeholder*="vacancy" i], input[placeholder*="reference" i], '
+                        'input[name*="vacancy" i], input[name*="reference" i], '
+                        'input[aria-label*="Vacancy" i], input[aria-label*="Reference" i], '
+                        'input[placeholder*="ref" i], input[name*="ref_no" i]'
+                    )
+                    if vac_inp and not vac_inp.input_value():
+                        vac_inp.fill(vacancy_number)
+                        fields_filled += 1
+                except Exception:
+                    pass
 
             _fill_phone_and_url_fields(page, phone, linkedin_url)
 
@@ -607,6 +623,7 @@ def submit_application_form(
     cover_letter_path: Optional[Path] = None,
     applicant_name: Optional[str] = None,
     applicant_email: Optional[str] = None,
+    vacancy_number: Optional[str] = None,
 ) -> bool:
     """Open form_url in browser, fill and submit. Returns True on success."""
     if not form_url.startswith("http"):
@@ -617,7 +634,6 @@ def submit_application_form(
             page = browser.new_page()
             page.set_default_timeout(25000)
             page.goto(form_url, wait_until="domcontentloaded", timeout=45000)
-            # Wait for SPA frameworks to render their content
             try:
                 page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
@@ -630,6 +646,7 @@ def submit_application_form(
                 applicant_name=applicant_name,
                 applicant_email=applicant_email,
                 form_url=form_url,
+                vacancy_number=vacancy_number,
             )
             browser.close()
             return ok

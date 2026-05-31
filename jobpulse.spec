@@ -1,7 +1,12 @@
 # PyInstaller spec for JobPulse (GUI + bot). Build: pyinstaller jobpulse.spec
 # Use a clean venv with only requirements.txt (PySide6-Essentials) to avoid full PySide6 (~126 MB).
 
+import os
 import sys
+
+import playwright as _playwright_pkg
+
+_pw_root = os.path.dirname(_playwright_pkg.__file__)
 
 block_cipher = None
 
@@ -18,6 +23,8 @@ a = Analysis(
     binaries=[],
     datas=[
         ('.env.example', '.'),
+        ('assets/icon.png', 'assets'),
+        (os.path.join(_pw_root, 'driver'), 'playwright/driver'),
     ],
     hiddenimports=[
         'src.main',
@@ -35,6 +42,8 @@ a = Analysis(
         'src.apply_helper',
         'dotenv',
         'playwright',
+        'playwright._impl._driver',
+        'playwright._repo_version',
         'requests',
         'bs4',
         'lxml',
@@ -99,7 +108,7 @@ if sys.platform == 'darwin':
     app = BUNDLE(
         coll,
         name='JobPulse.app',
-        icon=None,
+        icon='assets/icon.icns' if os.path.exists('assets/icon.icns') else None,
         bundle_identifier='af.jobpulse.app',
         version='1.0.0',
         info_plist={

@@ -13,6 +13,8 @@ def main_gui() -> int:
     app.setApplicationDisplayName("JobPulse")
     # Fusion base style gives consistent cross-platform rendering; QSS overrides visuals
     app.setStyle("Fusion")
+    from src.gui.assets import app_icon
+    app.setWindowIcon(app_icon())
 
     # Apply saved theme before window appears (avoids flash)
     from pathlib import Path

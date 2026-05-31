@@ -64,4 +64,5 @@ class UnCareersAdapter(SiteAdapter):
         return apply_via_browser(
             job.url, job.title, cv_path, cover_letter_path,
             skip_domains=["careers.un.org"], adapter_name=self.name,
+            vacancy_number=job.vacancy_number,
         )

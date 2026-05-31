@@ -61,9 +61,12 @@ IMAP_PORT = int(_get("IMAP_PORT", "993"))
 IMAP_USER = _get("IMAP_USER")
 IMAP_PASSWORD = _get("IMAP_PASSWORD")
 
-# Attachments
+# Attachments: separate CVs for email (formal CV) and forms (ATS resume)
 CV_PATH = _get_path("CV_PATH", "cv.pdf")
+CV_PATH_EMAIL = _get_path("CV_PATH_EMAIL", "") if _get("CV_PATH_EMAIL") else None
+CV_PATH_FORM = _get_path("CV_PATH_FORM", "") if _get("CV_PATH_FORM") else None
 COVER_LETTER_PATH = _get_path("COVER_LETTER_PATH", "cover_letter.pdf")
+ONLINE_RESUME_URL = _get("ONLINE_RESUME_URL")
 
 # Applicant details for form filling (set in .env; no defaults to avoid leaking personal data)
 FIRST_NAME = _get("FIRST_NAME")
