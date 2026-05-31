@@ -106,7 +106,7 @@ def _fill_selects_and_radios(page) -> None:
         pass
 
 
-_PHONE_LOCAL = PHONE_NUMBER  # e.g. "771234567"
+_PHONE_LOCAL = PHONE_NUMBER  # local number, no country code, e.g. "771234567"
 _PHONE_FULL_PLUS = f"{PHONE_COUNTRY_CODE}{PHONE_NUMBER}"  # e.g. "+93771234567"
 _PHONE_FULL_00 = f"00{PHONE_COUNTRY_CODE.lstrip('+')}{PHONE_NUMBER}"  # e.g. "0093771234567"
 
