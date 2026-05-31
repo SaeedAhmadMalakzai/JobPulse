@@ -422,6 +422,7 @@ class MainWindow(QMainWindow):
         self._schedule_timer = None
         self._log_pending: list = []
         self._log_flush_timer = None
+        self._smtp_warned = False
         self._apply_saved_theme()
         self._setup_tray()
         self._reschedule_timer()
@@ -920,6 +921,29 @@ class MainWindow(QMainWindow):
             self._account_edits[key] = le
             form.addRow(key.replace("_", " ").title(), le)
         layout_inner.addWidget(creds_group)
+
+        # LinkedIn sign-in helper (2FA / first login)
+        li_group = QGroupBox("LinkedIn Sign-in")
+        li_layout = QVBoxLayout(li_group)
+        li_layout.setSpacing(6)
+        li_note = QLabel(
+            "LinkedIn often asks for a verification code or CAPTCHA on the first sign-in. "
+            "Tick the box below to open a visible browser so you can complete it once — "
+            "the session is then saved and reused automatically (you can untick it afterwards)."
+        )
+        li_note.setWordWrap(True)
+        li_note.setStyleSheet("color: #64748b; font-size: 12px;")
+        li_layout.addWidget(li_note)
+        self._linkedin_show_browser_cb = QCheckBox(
+            "  Show browser window for LinkedIn login (needed for 2FA / first sign-in)"
+        )
+        self._linkedin_show_browser_cb.setToolTip(
+            "When ticked, LinkedIn runs in a visible window so you can solve any 2FA/CAPTCHA.\n"
+            "Maps to LINKEDIN_HEADLESS=false. Leave unticked for fast background runs once signed in."
+        )
+        li_layout.addWidget(self._linkedin_show_browser_cb)
+        layout_inner.addWidget(li_group)
+
         layout_inner.addStretch()
 
         scroll.setWidget(inner)
@@ -958,6 +982,8 @@ class MainWindow(QMainWindow):
             if description:
                 desc = QLabel(description)
                 desc.setWordWrap(True)
+                desc.setTextFormat(Qt.TextFormat.RichText)
+                desc.setOpenExternalLinks(True)
                 desc.setStyleSheet("color: #64748b; font-size: 12px; margin-bottom: 4px;")
                 lay.addRow(desc)
             for key in keys:
@@ -984,7 +1010,10 @@ class MainWindow(QMainWindow):
 
         add_section(
             "Email (SMTP) — Sending Applications",
-            "Used when the bot sends your application by email. Alert email receives notifications.",
+            "Used when the bot sends your application by email. Alert email receives notifications.<br>"
+            "⚠️ <b>Gmail:</b> your normal password will be rejected — you must create an "
+            "<a href='https://support.google.com/accounts/answer/185833'>App Password</a> "
+            "(16 characters) and paste it as <b>SMTP Password</b>.",
             SETTINGS_SMTP,
         )
         add_section(
@@ -1273,11 +1302,17 @@ class MainWindow(QMainWindow):
         adapters = [x.strip().lower() for x in (env.get("ADAPTERS") or "").split(",") if x.strip()]
         for adapter_name, cb in self._portal_checks.items():
             cb.setChecked(adapter_name in adapters if adapters else True)
+        # "Show browser" = LINKEDIN_HEADLESS false (default headless=true → unticked)
+        if getattr(self, "_linkedin_show_browser_cb", None) is not None:
+            headless = (env.get("LINKEDIN_HEADLESS") or "true").lower() in ("1", "true", "yes", "on")
+            self._linkedin_show_browser_cb.setChecked(not headless)
 
     def _save_accounts(self, show_message: bool = True) -> None:
         updates = {k: le.text().strip() for k, le in self._account_edits.items()}
         enabled = [name for name, cb in self._portal_checks.items() if cb.isChecked()]
         updates["ADAPTERS"] = ",".join(enabled) if enabled else ""
+        if getattr(self, "_linkedin_show_browser_cb", None) is not None:
+            updates["LINKEDIN_HEADLESS"] = "false" if self._linkedin_show_browser_cb.isChecked() else "true"
         save_env(updates)
         if show_message:
             QMessageBox.information(self, "Saved", "Account credentials and portal selection saved to .env")
@@ -1367,6 +1402,12 @@ class MainWindow(QMainWindow):
 
     def _append_log_line(self, line: str) -> None:
         kind, display = parse_log_line(line)
+        # One-time, actionable nudge when Gmail rejects the SMTP login mid-run.
+        if not self._smtp_warned:
+            low = line.lower()
+            if "gmail rejected login" in low or "app password" in low:
+                self._smtp_warned = True
+                QTimer.singleShot(0, self._warn_smtp_app_password)
         if not display and kind == "muted":
             return
         self._log_buffer.append(line)
@@ -1660,6 +1701,7 @@ class MainWindow(QMainWindow):
 
         self._log_buffer.clear()
         self._log_pending.clear()
+        self._smtp_warned = False
         self._append_log_line("▶ Starting JobPulse bot…")
 
         self._process = QProcess(self)
@@ -1733,6 +1775,32 @@ class MainWindow(QMainWindow):
         self._append_log_line(f"{msg} Run finished (exit code {code}).")
         self._notify_run_finished(len(applied), len(skipped))
         self._play_finish_sound()
+
+    def _warn_smtp_app_password(self) -> None:
+        """Shown once per run if Gmail rejects the SMTP login — links to the fix."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Gmail rejected the email login")
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(
+            "<b>Email applications can't be sent.</b><br><br>"
+            "Gmail blocks sign-in with your normal password. Create a 16-character "
+            "<a href='https://support.google.com/accounts/answer/185833'>App Password</a> "
+            "and paste it as <b>SMTP Password</b> in Settings → Email (SMTP)."
+        )
+        open_btn = box.addButton("Open App Password page", QMessageBox.ButtonRole.AcceptRole)
+        settings_btn = box.addButton("Go to Settings", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Close)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is open_btn:
+            from PySide6.QtGui import QDesktopServices
+            from PySide6.QtCore import QUrl
+            QDesktopServices.openUrl(QUrl("https://support.google.com/accounts/answer/185833"))
+        elif clicked is settings_btn:
+            tabs = self.findChild(QTabWidget)
+            if tabs:
+                tabs.setCurrentIndex(3)  # Settings tab
 
     def _play_finish_sound(self) -> None:
         env = load_env()
