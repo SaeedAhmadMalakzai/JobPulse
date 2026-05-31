@@ -128,12 +128,17 @@ def _wait_for_visible_selector(page, selectors: List[str], timeout_ms: int = 150
 
 def _is_logged_in(page) -> bool:
     u = (page.url or "").lower()
-    if "/feed" in u or "/jobs/" in u:
+    # Explicit signed-out / challenge URLs first (an authenticated session never sits here).
+    if any(x in u for x in ("/login", "/authwall", "/checkpoint", "/uas/login", "signup")):
+        return False
+    if "/feed" in u or "/jobs" in u or "/mynetwork" in u or "/in/" in u:
         return True
     markers = [
         "input[placeholder*='Search']",
         "button[aria-label*='Me']",
         "img.global-nav__me-photo",
+        "div.global-nav__me",
+        "a[href*='/feed/']",
     ]
     return _first_visible(page, markers) is not None
 
@@ -232,10 +237,17 @@ def _linkedin_login(page, timeout: int = 25000) -> bool:
         LOG.warning("  [linkedin] No LINKEDIN_EMAIL/PASSWORD set — skipping LinkedIn.")
         return False
     try:
-        # 1) Reuse a saved session if we have one.
+        # 1) Reuse a saved session if we have one. Let any redirect chain settle first —
+        #    an authenticated hit on /feed/ can bounce through an interstitial before landing.
         page.goto(f"{BASE_URL}/feed/", wait_until="domcontentloaded", timeout=timeout)
+        try:
+            page.wait_for_load_state("networkidle", timeout=6000)
+        except Exception:
+            pass
+        page.wait_for_timeout(1500)
         if _is_logged_in(page):
             LOG.info("  [linkedin] Reusing saved session — already logged in.")
+            _save_state(page)
             return True
 
         # 2) Fresh login.
@@ -259,6 +271,15 @@ def _linkedin_login(page, timeout: int = 25000) -> bool:
         pass_sel = _wait_for_visible_selector(page,
             ["#password", "input[name='session_password']", "input[type='password']"], timeout_ms=15000)
         if not user_sel or not pass_sel:
+            # No form usually means LinkedIn redirected an already-authenticated session
+            # back to the app — confirm before declaring failure.
+            page.wait_for_timeout(1500)
+            if _is_logged_in(page):
+                LOG.info("  [linkedin] Already authenticated (login form not needed).")
+                _save_state(page)
+                return True
+            if _is_challenge(page):
+                return _wait_out_challenge(page)
             LOG.warning("  [linkedin] Login form fields not visible (url=%s). LinkedIn may be "
                         "throttling automated logins; try LINKEDIN_HEADLESS=false.", page.url)
             return False
