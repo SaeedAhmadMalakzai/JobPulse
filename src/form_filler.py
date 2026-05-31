@@ -521,28 +521,14 @@ def fill_and_submit_form_on_page(
             _fill_required_empty_fields(page, applicant_name, applicant_email, phone)
             page.wait_for_timeout(500)
 
-            # CAPTCHA on first step
+            # CAPTCHA on first step (solve via 2Captcha if CAPTCHA_API_KEY is set; fires the
+            # grecaptcha callback so the form unlocks rather than just setting the token field).
             if step == 0:
-                recaptcha_el = page.query_selector('[data-sitekey], iframe[src*="recaptcha"]')
-                if recaptcha_el:
-                    site_key = recaptcha_el.get_attribute("data-sitekey")
-                    if not site_key and recaptcha_el.get_attribute("src"):
-                        m = re.search(r"[?&]k=([^&]+)", recaptcha_el.get_attribute("src") or "")
-                        if m:
-                            site_key = m.group(1)
-                    if site_key:
-                        try:
-                            from src.captcha_solver import solve_recaptcha_v2
-                            token = solve_recaptcha_v2(site_key, form_url)
-                            if token:
-                                page.evaluate("""(token) => {
-                                    const t = document.querySelector('textarea[name="g-recaptcha-response"]');
-                                    if (t) { t.value = token; t.innerHTML = token; }
-                                }""", token)
-                        except Exception:
-                            pass
-                    else:
-                        LOG.warning("  [form] CAPTCHA detected but no site key found.")
+                try:
+                    from src.browser_utils import solve_captcha_on_page
+                    solve_captcha_on_page(page, form_url)
+                except Exception:
+                    pass
 
             # Find submit or next button
             submit_btn = None
@@ -631,7 +617,8 @@ def submit_application_form(
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
+            from src.browser_utils import new_stealth_context
+            page = new_stealth_context(browser).new_page()
             page.set_default_timeout(25000)
             page.goto(form_url, wait_until="domcontentloaded", timeout=45000)
             try:

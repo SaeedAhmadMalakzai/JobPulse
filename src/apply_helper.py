@@ -72,7 +72,8 @@ def apply_via_browser(
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
+            from src.browser_utils import new_stealth_context
+            page = new_stealth_context(browser).new_page()
             page.set_default_timeout(30000)
             try:
                 page.goto(job_url, wait_until="domcontentloaded", timeout=45000)

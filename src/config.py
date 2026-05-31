@@ -106,6 +106,11 @@ LINKEDIN_HEADLESS = _get_bool("LINKEDIN_HEADLESS", True)
 LINKEDIN_INCLUDE_GLOBAL_REMOTE_SEARCH = _get_bool("LINKEDIN_INCLUDE_GLOBAL_REMOTE_SEARCH", True)
 LINKEDIN_DEBUG_ARTIFACTS = _get_bool("LINKEDIN_DEBUG_ARTIFACTS", True)
 LINKEDIN_APPLY_TIMEOUT_SEC = _get_int("LINKEDIN_APPLY_TIMEOUT_SEC", 180)
+# Anti-bot: mask headless Chromium so LinkedIn login/apply is less likely to hit a challenge wall
+LINKEDIN_STEALTH = _get_bool("LINKEDIN_STEALTH", True)
+# When a login challenge (2FA / captcha / verification) appears in a VISIBLE browser
+# (LINKEDIN_HEADLESS=false), wait this many seconds for you to solve it manually before giving up.
+LINKEDIN_CHALLENGE_WAIT_SEC = _get_int("LINKEDIN_CHALLENGE_WAIT_SEC", 150)
 LINKEDIN_DISCOVERY_MAX_PAGES = _get_int("LINKEDIN_DISCOVERY_MAX_PAGES", 5)
 LINKEDIN_DISCOVERY_MAX_JOBS_PER_SEARCH = _get_int("LINKEDIN_DISCOVERY_MAX_JOBS_PER_SEARCH", 150)
 

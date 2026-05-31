@@ -49,11 +49,14 @@ from src.gui.run_history import save_last_run, load_last_run, load_run_history
 
 
 def _frozen_playwright_browser_dir(root: Path) -> Path | None:
-    """Directory for PLAYWRIGHT_BROWSERS_PATH when frozen, or None for Playwright default cache.
+    """Writable Chromium location for the frozen app.
 
-    Terminal `playwright install chromium` uses ~/Library/Caches/ms-playwright on macOS.
-    Older JobPulse builds used Application Support/.../playwright-browsers; keep using that
-    if Chromium is already there.
+    Must NEVER return None when frozen: with no PLAYWRIGHT_BROWSERS_PATH set, Playwright
+    falls back to the driver bundled *inside* the .app (Contents/Resources/.../.local-browsers),
+    which is empty and read-only — so launch fails with "Executable doesn't exist".
+
+    Prefer an already-populated JobPulse-local dir, then the standard macOS Playwright cache
+    (writable, shared with any `playwright install` run), else a JobPulse-owned dir.
     """
     local = root / "playwright-browsers"
     try:
@@ -64,7 +67,7 @@ def _frozen_playwright_browser_dir(root: Path) -> Path | None:
     except OSError:
         pass
     if sys.platform == "darwin":
-        return None
+        return Path.home() / "Library" / "Caches" / "ms-playwright"
     return local
 
 
@@ -1564,10 +1567,15 @@ class MainWindow(QMainWindow):
         self._log_buffer.clear()
 
         root.joinpath("data").mkdir(parents=True, exist_ok=True)
-        if not self._deps_ok_path.exists():
-            self._append_log_line("First run: checking dependencies…" if not getattr(sys, "frozen", False) else "First run: downloading Chromium…")
+        frozen = getattr(sys, "frozen", False)
+        # Frozen: always verify Chromium can actually launch (fast when present; downloads the
+        # correct build if missing or version-changed). The launch test is the only reliable
+        # check — a stale .gui_deps_ok flag must never let us skip it, or the bot subprocess
+        # fails with "Executable doesn't exist". Dev: pip install is genuinely one-time → flag.
+        if frozen or not self._deps_ok_path.exists():
+            self._append_log_line("Checking Chromium…" if frozen else "First run: checking dependencies…")
             self._start_btn.setEnabled(False)
-            self._install_thread = InstallDepsThread(root, "" if getattr(sys, "frozen", False) else sys.executable)
+            self._install_thread = InstallDepsThread(root, "" if frozen else sys.executable)
             self._install_thread.line_ready.connect(self._append_log_line)
             self._install_thread.finished_ok.connect(self._on_install_finished)
             self._install_thread.start()

@@ -27,6 +27,8 @@ from src.config import (
     LINKEDIN_DEBUG_ARTIFACTS,
     LINKEDIN_DISCOVERY_MAX_PAGES,
     LINKEDIN_DISCOVERY_MAX_JOBS_PER_SEARCH,
+    LINKEDIN_STEALTH,
+    LINKEDIN_CHALLENGE_WAIT_SEC,
     LOGS_DIR,
     ensure_dirs,
     CV_PATH,
@@ -39,6 +41,7 @@ from src.log import get_logger
 from src.email_utils import send_application_email
 from src.form_filler import fill_and_submit_form_on_page, _select_country_code, _PHONE_LOCAL, _PHONE_FULL_PLUS
 from src.job_page_utils import extract_apply_from_page
+from src.browser_utils import new_stealth_context
 
 LOG = get_logger("linkedin")
 
@@ -137,8 +140,10 @@ def _is_logged_in(page) -> bool:
 
 def _new_context(browser):
     ensure_dirs()
-    return browser.new_context(
-        storage_state=str(LINKEDIN_STATE_PATH) if LINKEDIN_STATE_PATH.exists() else None
+    return new_stealth_context(
+        browser,
+        storage_state=str(LINKEDIN_STATE_PATH) if LINKEDIN_STATE_PATH.exists() else None,
+        stealth=LINKEDIN_STEALTH,
     )
 
 
@@ -158,15 +163,86 @@ def _save_debug_artifact(page, job: JobListing, reason: str) -> None:
         pass
 
 
+def _is_challenge(page) -> bool:
+    """True if LinkedIn is showing a 2FA / captcha / verification checkpoint."""
+    u = (page.url or "").lower()
+    if "checkpoint" in u or "/challenge" in u or "add-phone" in u:
+        return True
+    try:
+        markers = [
+            "iframe[src*='captcha']", "iframe[title*='captcha' i]",
+            "input[name='pin']", "input#input__email_verification_pin",
+            "[data-test-id*='challenge']", "h1:has-text('verification')",
+        ]
+        return _first_visible(page, markers) is not None
+    except Exception:
+        return False
+
+
+def _save_state(page) -> None:
+    try:
+        ensure_dirs()
+        page.context.storage_state(path=str(LINKEDIN_STATE_PATH))
+    except Exception:
+        pass
+
+
+def _wait_out_challenge(page) -> bool:
+    """Give the user time to solve a challenge in a visible browser; poll until logged in.
+
+    Headless runs can't be solved by a human, so we fail fast and tell the user how to fix it.
+    """
+    if LINKEDIN_HEADLESS:
+        LOG.warning(
+            "  [linkedin] Login hit a verification/2FA challenge in headless mode — cannot solve "
+            "automatically. Set LINKEDIN_HEADLESS=false in Settings and run once to sign in "
+            "manually; the session is then saved and reused."
+        )
+        _save_debug_artifact_safe(page, "login_challenge_headless")
+        return False
+    wait_s = max(0, LINKEDIN_CHALLENGE_WAIT_SEC)
+    LOG.warning(
+        "  [linkedin] Verification/2FA challenge shown. Please complete it in the browser window "
+        "(waiting up to %ds)…", wait_s
+    )
+    end = time.time() + wait_s
+    while time.time() < end:
+        time.sleep(3)
+        try:
+            if _is_logged_in(page) and not _is_challenge(page):
+                LOG.info("  [linkedin] Challenge cleared — logged in.")
+                _save_state(page)
+                return True
+        except Exception:
+            continue
+    LOG.warning("  [linkedin] Challenge not completed in time.")
+    return False
+
+
+def _save_debug_artifact_safe(page, reason: str) -> None:
+    try:
+        from src.sites.base import JobListing as _JL
+        _save_debug_artifact(page, _JL(id="", title="login", company="", url=""), reason)
+    except Exception:
+        pass
+
+
 def _linkedin_login(page, timeout: int = 25000) -> bool:
     if not LINKEDIN_EMAIL or not LINKEDIN_PASSWORD:
+        LOG.warning("  [linkedin] No LINKEDIN_EMAIL/PASSWORD set — skipping LinkedIn.")
         return False
     try:
+        # 1) Reuse a saved session if we have one.
         page.goto(f"{BASE_URL}/feed/", wait_until="domcontentloaded", timeout=timeout)
         if _is_logged_in(page):
+            LOG.info("  [linkedin] Reusing saved session — already logged in.")
             return True
+
+        # 2) Fresh login.
+        LOG.info("  [linkedin] Signing in as %s…", LINKEDIN_EMAIL)
         page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=timeout)
         if _is_logged_in(page):
+            LOG.info("  [linkedin] Already logged in.")
             return True
         for sel in ['button:has-text("Accept")', 'button:has-text("Allow")',
                     'button:has-text("I agree")', '#onetrust-accept-btn-handler']:
@@ -183,22 +259,45 @@ def _linkedin_login(page, timeout: int = 25000) -> bool:
         pass_sel = _wait_for_visible_selector(page,
             ["#password", "input[name='session_password']", "input[type='password']"], timeout_ms=15000)
         if not user_sel or not pass_sel:
-            LOG.warning("  [linkedin] Login form fields not visible. url=%s", page.url)
+            LOG.warning("  [linkedin] Login form fields not visible (url=%s). LinkedIn may be "
+                        "throttling automated logins; try LINKEDIN_HEADLESS=false.", page.url)
             return False
         page.fill(user_sel, LINKEDIN_EMAIL)
         page.fill(pass_sel, LINKEDIN_PASSWORD)
         page.click('button[type="submit"]')
-        page.wait_for_load_state("domcontentloaded", timeout=timeout)
-        time.sleep(2)
-        if "login" in page.url.lower() or "checkpoint" in page.url.lower():
-            LOG.warning("  [linkedin] Login may have failed (captcha/verification). Check account.")
-            return False
         try:
-            ensure_dirs()
-            page.context.storage_state(path=str(LINKEDIN_STATE_PATH))
+            page.wait_for_load_state("domcontentloaded", timeout=timeout)
         except Exception:
             pass
-        return True
+        time.sleep(2)
+
+        # 3) Challenge / verification handling.
+        if _is_challenge(page):
+            return _wait_out_challenge(page)
+        if "login" in page.url.lower():
+            # Still on the login page → bad credentials or a soft error.
+            err = _first_visible(page, ["[error-for]", ".form__label--error", "#error-for-password"])
+            detail = ""
+            try:
+                detail = (err.inner_text() if err else "") or ""
+            except Exception:
+                pass
+            LOG.warning("  [linkedin] Login failed%s. Check email/password.",
+                        f" ({detail.strip()[:80]})" if detail.strip() else "")
+            return False
+
+        if _is_logged_in(page):
+            LOG.info("  [linkedin] Logged in successfully.")
+            _save_state(page)
+            return True
+
+        # Unknown state — give the visible browser a chance to settle/redirect.
+        page.wait_for_timeout(2000)
+        if _is_logged_in(page):
+            _save_state(page)
+            return True
+        LOG.warning("  [linkedin] Login ended in an unexpected state (url=%s).", page.url)
+        return False
     except Exception as e:
         LOG.warning("  [linkedin] Login error: %s", e)
         return False
@@ -277,10 +376,13 @@ def _fill_easy_apply_step_fields(page) -> None:
             except Exception:
                 pass
 
-        # Checkboxes
+        # Checkboxes (consent/eligibility) — but never the "follow company" box.
         for cb in page.query_selector_all('input[type="checkbox"]'):
             try:
                 if not cb.is_visible() or cb.is_checked():
+                    continue
+                cb_id = (cb.get_attribute("id") or "").lower()
+                if "follow" in cb_id:
                     continue
                 cb.click()
                 page.wait_for_timeout(150)
@@ -593,6 +695,7 @@ class LinkedInJobsAdapter(SiteAdapter):
             ])
             if not easy_btn:
                 return False
+            LOG.info("  [linkedin] Easy Apply: opening application for: %s", job.title[:55])
             easy_btn.click()
             page.wait_for_timeout(2500)
 
@@ -605,21 +708,38 @@ class LinkedInJobsAdapter(SiteAdapter):
                     return False
 
             submitted = False
+            cv_uploaded = False
             for step in range(15):
                 page.wait_for_timeout(1000)
 
-                # Resume/CV upload on every step (some steps have file inputs)
+                # Resume/CV upload — only once (re-uploading each step replaces the selection
+                # and slows the flow). LinkedIn keeps the resume across steps.
+                if not cv_uploaded:
+                    try:
+                        file_inps = page.query_selector_all(
+                            'div[role="dialog"] input[type="file"], '
+                            '.jobs-easy-apply-modal input[type="file"]'
+                        )
+                        for fi in file_inps:
+                            try:
+                                fi.set_input_files(str(cv_path))
+                                page.wait_for_timeout(800)
+                                cv_uploaded = True
+                                LOG.info("  [linkedin] Resume uploaded: %s", cv_path.name)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
+                # Don't auto-follow the company on submit.
                 try:
-                    file_inps = page.query_selector_all(
-                        'div[role="dialog"] input[type="file"], '
-                        '.jobs-easy-apply-modal input[type="file"]'
+                    follow = page.query_selector(
+                        'div[role="dialog"] input#follow-company-checkbox, '
+                        'div[role="dialog"] label:has-text("Follow") input[type="checkbox"]'
                     )
-                    for fi in file_inps:
-                        try:
-                            fi.set_input_files(str(cv_path))
-                            page.wait_for_timeout(800)
-                        except Exception:
-                            pass
+                    if follow and follow.is_visible() and follow.is_checked():
+                        follow.click()
+                        page.wait_for_timeout(150)
                 except Exception:
                     pass
 
@@ -754,7 +874,7 @@ class LinkedInJobsAdapter(SiteAdapter):
             if not self._browser:
                 LOG.warning("  [linkedin] No browser for external apply: %s", job.title[:50])
                 return False
-            ext_context = self._browser.new_context()
+            ext_context = new_stealth_context(self._browser, stealth=LINKEDIN_STEALTH)
             page = ext_context.new_page()
             page.set_default_timeout(30000)
             try:
