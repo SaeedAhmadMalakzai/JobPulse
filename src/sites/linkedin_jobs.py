@@ -49,6 +49,23 @@ BASE_URL = "https://www.linkedin.com"
 LOGIN_URL = "https://www.linkedin.com/login"
 JOBS_BASE = "https://www.linkedin.com/jobs/search"
 
+# The Easy Apply trigger is sometimes a <button> and sometimes an <a> (and may be localized,
+# e.g. French "Candidature simplifiée"). Match all of these or we fall through to external apply.
+_EASY_APPLY_SELECTORS = [
+    'button[aria-label*="Easy Apply" i]',
+    'a[aria-label*="Easy Apply" i]',
+    'button:has-text("Easy Apply")',
+    'a:has-text("Easy Apply")',
+    'button:has-text("Quick Apply")',
+    'button[aria-label*="Candidature simplifiée" i]',
+    'a[aria-label*="Candidature simplifiée" i]',
+    ':has-text("Candidature simplifiée")',
+    '[aria-label*="Easy Apply" i]',
+    'button.jobs-apply-button',
+    'a.jobs-apply-button',
+    '.jobs-apply-button button',
+]
+
 
 def _build_search_urls() -> List[str]:
     """Build multiple LinkedIn search URLs from keyword batches for broader coverage."""
@@ -109,6 +126,34 @@ def _first_visible(page, selectors: List[str]):
                 return el
         except Exception:
             continue
+    return None
+
+
+def _robust_find_easy_apply(page, timeout_ms: int = 15000):
+    """Poll for the Easy Apply control (button OR anchor), scrolling it into view.
+
+    LinkedIn renders the apply control a few seconds after load and sometimes off-screen,
+    so a plain query + is_visible() check misses it. Returns an ElementHandle or None.
+    """
+    end = time.time() + (timeout_ms / 1000.0)
+    while time.time() < end:
+        for sel in _EASY_APPLY_SELECTORS:
+            try:
+                el = page.query_selector(sel)
+            except Exception:
+                continue
+            if not el:
+                continue
+            try:
+                el.scroll_into_view_if_needed(timeout=1500)
+            except Exception:
+                pass
+            try:
+                if el.is_visible():
+                    return el
+            except Exception:
+                continue
+        page.wait_for_timeout(800)
     return None
 
 
@@ -626,13 +671,7 @@ class LinkedInJobsAdapter(SiteAdapter):
                 pass
 
             # Try Easy Apply first
-            easy_apply = _first_visible(page, [
-                'button[aria-label*="Easy Apply"]',
-                'button:has-text("Easy Apply")',
-                'button:has-text("Quick Apply")',
-                'button.jobs-apply-button',
-                '.jobs-apply-button button',
-            ])
+            easy_apply = _robust_find_easy_apply(page)
             if easy_apply:
                 ok = self._do_easy_apply(page, job, cv, cover_letter_path)
                 if ok:
@@ -706,14 +745,10 @@ class LinkedInJobsAdapter(SiteAdapter):
                 continue
         return None
 
-    def _do_easy_apply(self, page, job: JobListing, cv_path: Path, cover_letter_path: Optional[str]) -> bool:
+    def _do_easy_apply(self, page, job: JobListing, cv_path: Path, cover_letter_path: Optional[str],
+                       dry_run: bool = False) -> bool:
         try:
-            easy_btn = _first_visible(page, [
-                'button[aria-label*="Easy Apply"]',
-                'button:has-text("Easy Apply")',
-                'button:has-text("Quick Apply")',
-                'button.jobs-apply-button',
-            ])
+            easy_btn = _robust_find_easy_apply(page)
             if not easy_btn:
                 return False
             LOG.info("  [linkedin] Easy Apply: opening application for: %s", job.title[:55])
@@ -795,22 +830,36 @@ class LinkedInJobsAdapter(SiteAdapter):
                     _fill_easy_apply_step_fields(page)
                     page.wait_for_timeout(600)
 
-                # Find the action button (Submit takes priority)
+                # Find the action button (Submit takes priority). Bilingual EN/FR — LinkedIn
+                # localizes the Easy Apply modal (Suivant/Réviser/Envoyer la candidature).
                 submit_btn = _first_visible(page, [
-                    'button[aria-label*="Submit application"]',
+                    'button[aria-label*="Submit application" i]',
                     'button:has-text("Submit application")',
+                    'button[aria-label*="Envoyer la candidature" i]',
+                    'button:has-text("Envoyer la candidature")',
                 ])
                 review_btn = _first_visible(page, [
-                    'button[aria-label*="Review"]',
+                    'button[aria-label*="Review" i]',
+                    'button:has-text("Review your application")',
                     'button:has-text("Review")',
+                    'button[aria-label*="Vérifier" i]',
+                    'button:has-text("Réviser")',
+                    'button:has-text("Vérifier")',
                 ])
                 next_btn = _first_visible(page, [
-                    'button[aria-label*="Next"]',
+                    'button[aria-label*="Continue to next step" i]',
+                    'button[aria-label*="Next" i]',
                     'button:has-text("Next")',
                     'button:has-text("Continue")',
+                    'button:has-text("Suivant")',
+                    'button:has-text("Continuer")',
                 ])
 
                 if submit_btn:
+                    if dry_run:
+                        LOG.info("  [linkedin] DRY RUN — reached 'Submit application'; STOPPING "
+                                 "without submitting (no application sent): %s", job.title[:50])
+                        return True
                     content_before = page.url
                     submit_btn.click()
                     page.wait_for_timeout(3000)
@@ -826,6 +875,10 @@ class LinkedInJobsAdapter(SiteAdapter):
                         'button:has-text("Submit")',
                     ])
                     if final_submit:
+                        if dry_run:
+                            LOG.info("  [linkedin] DRY RUN — reached 'Submit application' after "
+                                     "Review; STOPPING without submitting: %s", job.title[:50])
+                            return True
                         final_submit.click()
                         page.wait_for_timeout(3000)
                         submitted = True

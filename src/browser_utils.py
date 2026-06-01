@@ -63,6 +63,8 @@ def new_stealth_context(
         "locale": "en-US",
         "timezone_id": "Asia/Kabul",
         "user_agent": DEFAULT_UA,
+        # Prefer English so localized sites (e.g. LinkedIn job posts) render in English.
+        "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
     }
     if storage_state:
         kwargs["storage_state"] = storage_state
