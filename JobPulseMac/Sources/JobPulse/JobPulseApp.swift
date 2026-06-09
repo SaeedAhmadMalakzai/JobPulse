@@ -8,6 +8,7 @@ struct JobPulseApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(state)
+                .tint(Theme.brand)
                 .frame(minWidth: 940, minHeight: 600)
         }
         .windowStyle(.titleBar)

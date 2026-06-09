@@ -4,7 +4,10 @@ import SwiftUI
 /// system materials, semantic colors, a single confident accent, and a
 /// consistent spacing/radius rhythm.
 enum Theme {
-    static let accent = Color.accentColor
+    /// Brand accent (indigo) — matches the hero mark and the console; applied app-wide
+    /// via `.tint(Theme.brand)` so primary controls share one confident accent.
+    static let brand = Color(red: 0.36, green: 0.33, blue: 0.86)
+    static let accent = brand
 
     enum Status {
         static let idle = Color.secondary
