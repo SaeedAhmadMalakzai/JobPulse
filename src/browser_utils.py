@@ -5,11 +5,18 @@ missing languages/plugins, default UA). These helpers make the browser look like
 normal desktop Chrome so logins/applies are less likely to hit a challenge wall.
 """
 import re
+import threading
+from contextlib import contextmanager
 from typing import Optional
 
+from src.config import DISCOVERY_CONCURRENCY
 from src.log import get_logger
 
 LOG = get_logger("browser")
+
+# Bound the number of concurrent Chromium instances across all threads so a parallel
+# discovery run can't spawn a browser per adapter and exhaust memory.
+_BROWSER_SEMAPHORE = threading.BoundedSemaphore(max(1, DISCOVERY_CONCURRENCY))
 
 # A realistic, current desktop Chrome UA (macOS). Kept generic on purpose.
 DEFAULT_UA = (
@@ -72,9 +79,37 @@ def new_stealth_context(
     if stealth:
         try:
             ctx.add_init_script(STEALTH_INIT_JS)
-        except Exception:
-            pass
+        except Exception as e:
+            LOG.warning("  [browser] Could not inject stealth script (continuing without it): %s", e)
     return ctx
+
+
+@contextmanager
+def browser_session(headless: bool = True, stealth: bool = True, storage_state: Optional[str] = None):
+    """Yield a ready-to-use Playwright page with guaranteed teardown.
+
+    Centralizes the launch → stealth-context → page → close lifecycle and enforces
+    the global concurrency cap. Use this instead of hand-rolling sync_playwright()
+    so no code path can leak a Chromium process.
+
+        with browser_session() as page:
+            page.goto(url)
+            ...
+    """
+    from playwright.sync_api import sync_playwright
+
+    with _BROWSER_SEMAPHORE:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=headless)
+            try:
+                ctx = new_stealth_context(browser, storage_state=storage_state, stealth=stealth)
+                page = ctx.new_page()
+                yield page
+            finally:
+                try:
+                    browser.close()
+                except Exception as e:
+                    LOG.warning("  [browser] Error closing browser: %s", e)
 
 
 def _find_recaptcha_sitekey(page) -> Optional[str]:

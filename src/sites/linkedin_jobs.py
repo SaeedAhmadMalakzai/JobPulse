@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import List, Optional
 from urllib.parse import parse_qs, urlencode, urlparse
 
-from playwright.sync_api import sync_playwright
 
 from src.sites.base import JobListing, SiteAdapter, matches_job_keywords
 from src.config import (
@@ -31,10 +30,7 @@ from src.config import (
     LINKEDIN_CHALLENGE_WAIT_SEC,
     LOGS_DIR,
     ensure_dirs,
-    CV_PATH,
-    SMTP_FROM_NAME,
     SMTP_USER,
-    PHONE_NUMBER,
     LINKEDIN_PROFILE_URL,
 )
 from src.log import get_logger
@@ -370,49 +366,60 @@ def _linkedin_login(page, timeout: int = 25000) -> bool:
 
 
 def _fill_easy_apply_step_fields(page) -> None:
-    """Fill dropdowns, radio, checkbox, text/number/phone inputs in the current Easy Apply step."""
+    """Fill ONLY fields we can answer truthfully from the user's profile.
+
+    No fabrication: arbitrary screening dropdowns/radios and unknown questions are
+    left blank unless FORM_FILL_GUESS is enabled. If a required question can't be
+    answered honestly, the step won't validate and the application is abandoned
+    (caller flags it for manual review) rather than submitted with invented answers.
+    """
+    from src.config import (
+        FIRST_NAME, LAST_NAME, FULL_NAME, COUNTRY, CITY, YEARS_EXPERIENCE, GENDER,
+        SUBMISSION_EMAIL, FORM_FILL_GUESS,
+    )
+
+    def _label_of(el) -> str:
+        try:
+            lid = el.get_attribute("id")
+            if lid:
+                lab = page.query_selector(f'label[for="{lid}"]')
+                if lab:
+                    return (lab.inner_text() or "").lower()
+            return (el.get_attribute("aria-label") or el.get_attribute("placeholder") or "").lower()
+        except Exception:
+            return ""
+
     try:
-        # Native <select>
-        for sel in page.query_selector_all("select"):
-            if not sel.is_visible():
-                continue
-            try:
-                opts = sel.query_selector_all("option")
-                if not opts:
+        # Native <select> / custom listbox: we can't know the correct answer to an
+        # arbitrary screening dropdown, so only auto-pick when explicitly opted in.
+        if FORM_FILL_GUESS:
+            for sel in page.query_selector_all("select"):
+                if not sel.is_visible():
                     continue
-                val = None
-                for opt in opts:
-                    text = (opt.inner_text() or opt.get_attribute("value") or "").strip().lower()
-                    if text in ("yes", "1", "2", "3", "5", "1 year", "2 years", "3 years",
-                                "5 years", "i am", "authorized", "authorised"):
-                        val = opt.get_attribute("value") or text
-                        break
-                if val is None and len(opts) > 1:
-                    val = opts[1].get_attribute("value") or (opts[1].inner_text() or "").strip()
-                if val is not None:
-                    sel.select_option(value=val)
-                    page.wait_for_timeout(200)
-            except Exception:
                 try:
-                    sel.select_option(index=1)
+                    opts = sel.query_selector_all("option")
+                    if len(opts) > 1:
+                        val = opts[1].get_attribute("value") or (opts[1].inner_text() or "").strip()
+                        if val:
+                            sel.select_option(value=val)
+                            page.wait_for_timeout(150)
+                except Exception:
+                    pass
+            for lb in page.query_selector_all('[role="listbox"]'):
+                if not lb.is_visible():
+                    continue
+                try:
+                    lb.click()
+                    page.wait_for_timeout(300)
+                    opt = page.query_selector('[role="option"]')
+                    if opt and opt.is_visible():
+                        opt.click()
+                        page.wait_for_timeout(250)
                 except Exception:
                     pass
 
-        # Custom listbox
-        for lb in page.query_selector_all('[role="listbox"]'):
-            if not lb.is_visible():
-                continue
-            try:
-                lb.click()
-                page.wait_for_timeout(400)
-                opt = page.query_selector('[role="option"]')
-                if opt and opt.is_visible():
-                    opt.click()
-                    page.wait_for_timeout(300)
-            except Exception:
-                pass
-
-        # Radio groups
+        # Radio groups: only an honest consent/terms option is auto-selected.
+        # An affirmative ("yes"/authorized) or first-option guess is opt-in only.
         for group in page.query_selector_all('div[role="radiogroup"], fieldset'):
             try:
                 radios = [r for r in group.query_selector_all('input[type="radio"], [role="radio"]') if r.is_visible()]
@@ -420,93 +427,81 @@ def _fill_easy_apply_step_fields(page) -> None:
                     continue
                 if any(r.get_attribute("checked") == "true" or r.get_attribute("aria-checked") == "true" for r in radios):
                     continue
+                chosen = None
                 for r in radios:
-                    label_text = ""
-                    try:
-                        lid = r.get_attribute("id")
-                        if lid:
-                            lab = page.query_selector(f'label[for="{lid}"]')
-                            if lab:
-                                label_text = (lab.inner_text() or "").lower()
-                        if not label_text:
-                            label_text = (r.get_attribute("aria-label") or "").lower()
-                    except Exception:
-                        pass
-                    if "yes" in label_text or "authorized" in label_text or "agree" in label_text:
-                        r.click()
-                        page.wait_for_timeout(200)
+                    lt = _label_of(r)
+                    if any(t in lt for t in ("agree", "consent", "terms", "privacy")):
+                        chosen = r
                         break
-                else:
-                    radios[0].click()
-                    page.wait_for_timeout(200)
+                    if FORM_FILL_GUESS and ("yes" in lt or "authorized" in lt or "authorised" in lt):
+                        chosen = r
+                        break
+                if chosen is None and FORM_FILL_GUESS:
+                    chosen = radios[0]
+                if chosen is not None:
+                    chosen.click()
+                    page.wait_for_timeout(150)
             except Exception:
                 pass
 
-        # Checkboxes (consent/eligibility) — but never the "follow company" box.
+        # Checkboxes: accept consent/terms; never auto-follow the company; other
+        # boxes only when guessing is enabled.
         for cb in page.query_selector_all('input[type="checkbox"]'):
             try:
                 if not cb.is_visible() or cb.is_checked():
                     continue
-                cb_id = (cb.get_attribute("id") or "").lower()
-                if "follow" in cb_id:
+                meta = (cb.get_attribute("id") or "").lower() + " " + _label_of(cb)
+                if "follow" in meta:
                     continue
-                cb.click()
-                page.wait_for_timeout(150)
+                if any(t in meta for t in ("agree", "consent", "terms", "privacy")) or FORM_FILL_GUESS:
+                    cb.click()
+                    page.wait_for_timeout(120)
             except Exception:
                 pass
 
-        from src.config import FIRST_NAME, LAST_NAME, FULL_NAME, COUNTRY, CITY, YEARS_EXPERIENCE, GENDER
+        # Text/number/phone/url inputs — fill only what we truly know.
         dialog = page.query_selector('div[role="dialog"], .jobs-easy-apply-modal')
         container = dialog or page
         for inp in container.query_selector_all('input[type="text"], input[type="number"], input[type="tel"], input[type="url"]'):
             try:
-                if not inp.is_visible():
+                if not inp.is_visible() or (inp.input_value() or "").strip():
                     continue
-                val = (inp.input_value() or "").strip()
-                if val:
-                    continue
-                input_type = (inp.get_attribute("type") or "text").lower()
-                label_text = ""
-                try:
-                    lid = inp.get_attribute("id")
-                    if lid:
-                        lab = page.query_selector(f'label[for="{lid}"]')
-                        if lab:
-                            label_text = (lab.inner_text() or "").lower()
-                    if not label_text:
-                        label_text = (inp.get_attribute("aria-label") or inp.get_attribute("placeholder") or "").lower()
-                except Exception:
-                    pass
+                itype = (inp.get_attribute("type") or "text").lower()
+                lt = _label_of(inp)
 
-                if input_type == "tel" or "phone" in label_text or "mobile" in label_text:
+                if itype == "tel" or "phone" in lt or "mobile" in lt:
                     if _select_country_code(page, inp):
                         inp.fill(_PHONE_LOCAL)
                     else:
                         inp.fill(_PHONE_FULL_PLUS)
-                elif input_type == "url" or "linkedin" in label_text or "profile" in label_text or "website" in label_text:
-                    inp.fill(LINKEDIN_PROFILE_URL or "")
-                elif "first" in label_text and "name" in label_text:
+                elif itype == "url" or "linkedin" in lt or "profile" in lt or "website" in lt:
+                    if LINKEDIN_PROFILE_URL:
+                        inp.fill(LINKEDIN_PROFILE_URL)
+                elif "first" in lt and "name" in lt:
                     inp.fill(FIRST_NAME)
-                elif ("last" in label_text or "family" in label_text) and "name" in label_text:
+                elif ("last" in lt or "family" in lt) and "name" in lt:
                     inp.fill(LAST_NAME)
-                elif "name" in label_text:
+                elif "name" in lt and "company" not in lt and "user" not in lt:
                     inp.fill(FULL_NAME)
-                elif "email" in label_text:
-                    inp.fill(SMTP_USER or "")
-                elif "city" in label_text or "location" in label_text:
+                elif "email" in lt:
+                    inp.fill(SUBMISSION_EMAIL or SMTP_USER or "")
+                elif "city" in lt or "location" in lt:
                     inp.fill(CITY)
-                elif "country" in label_text or "nationality" in label_text:
+                elif "country" in lt or "nationality" in lt:
                     inp.fill(COUNTRY)
-                elif "gender" in label_text:
+                elif "gender" in lt:
                     inp.fill(GENDER)
-                elif "salary" in label_text or "compensation" in label_text:
-                    inp.fill("0")
-                elif "headline" in label_text or "summary" in label_text:
-                    inp.fill("Software Engineer with 5+ years experience")
-                elif input_type == "number" or "year" in label_text or "experience" in label_text or "gpa" in label_text:
-                    inp.fill(YEARS_EXPERIENCE)
-                else:
-                    inp.fill(YEARS_EXPERIENCE)
+                elif ("year" in lt and ("experience" in lt or "exp" in lt)) or "years of experience" in lt:
+                    if YEARS_EXPERIENCE:
+                        inp.fill(YEARS_EXPERIENCE)
+                elif FORM_FILL_GUESS:
+                    # Opt-in only — these are guesses, not facts.
+                    if "salary" in lt or "compensation" in lt:
+                        inp.fill("0")
+                    elif itype == "number" or "experience" in lt or "gpa" in lt:
+                        inp.fill(YEARS_EXPERIENCE)
+                # Otherwise leave blank: an unanswerable required field correctly
+                # blocks submission instead of getting a fabricated value.
             except Exception:
                 pass
     except Exception:
@@ -617,23 +612,37 @@ class LinkedInJobsAdapter(SiteAdapter):
                         if href in seen:
                             continue
                         seen.add(href)
+                        # Read the WHOLE card via closest() — its text reads
+                        # "Title\nTitle\nCompany\nLocation". lines[0] is the title; the first
+                        # line that isn't the (repeated) title is the company. This is robust to
+                        # LinkedIn's hashed/obfuscated CSS class names. (Search cards carry no
+                        # per-job posted date; the search itself is filtered to the last 30 days
+                        # via f_TPR, so posted_date is left None rather than guessed.)
                         title = ""
+                        company = ""
                         try:
-                            card = a.locator(
-                                "xpath=ancestor::div[contains(@class, 'job') or "
-                                "contains(@class, 'card') or contains(@class, 'base-card')][1]"
-                            )
-                            title = card.locator(
-                                ".job-card-list__title, .base-search-card__title, h3"
-                            ).first.inner_text(timeout=2000)
+                            card_el = a.evaluate_handle(
+                                "el => el.closest('li, div[class*=card], div[class*=job]')"
+                            ).as_element()
+                            if card_el:
+                                lines = [ln.strip() for ln in (card_el.inner_text() or "").split("\n") if ln.strip()]
+                                if lines:
+                                    title = lines[0]
+                                    head = title.lower()
+                                    for ln in lines[1:]:
+                                        if ln.lower() != head and len(ln) > 1:
+                                            company = ln
+                                            break
                         except Exception:
+                            pass
+                        if not title:
                             title = a.get_attribute("aria-label") or (a.inner_text() or "").splitlines()[0]
                         title = _clean_text(title or "Job")
                         if len(title) < 3:
                             continue
                         job_id = "linkedin_" + hashlib.sha256(href.encode()).hexdigest()[:14]
                         jobs.append(JobListing(
-                            id=job_id, title=title, company="", url=href, location="",
+                            id=job_id, title=title, company=_clean_text(company), url=href, location="",
                         ))
                     except Exception:
                         continue
@@ -687,6 +696,12 @@ class LinkedInJobsAdapter(SiteAdapter):
 
             LOG.info("  [linkedin] No apply path found for: %s", job.title[:60])
             _save_debug_artifact(page, job, "no_apply_path")
+            from src.needs_review import record_needs_review
+            record_needs_review(
+                job.title, job.url or "",
+                ["LinkedIn — no automatic apply path; open the job and apply manually"],
+                site="linkedin",
+            )
             return False
         except Exception as e:
             LOG.error("  [linkedin] Apply error: %s", e)
@@ -956,6 +971,12 @@ class LinkedInJobsAdapter(SiteAdapter):
             except Exception as e:
                 LOG.warning("  [linkedin] External page load failed for %s: %s", apply_url[:60], e)
                 ext_context.close()
+                from src.needs_review import record_needs_review
+                record_needs_review(
+                    job.title, apply_url,
+                    ["LinkedIn external application (page didn't load) — apply on the company site"],
+                    site="linkedin",
+                )
                 return False
             page.wait_for_timeout(3000)
             try:
@@ -978,19 +999,30 @@ class LinkedInJobsAdapter(SiteAdapter):
                 if ok:
                     LOG.info("  [linkedin] External applied via email to %s for: %s", to_email, job.title[:40])
                 return ok
-            from src.apply_helper import _pick_cv as _pck
+            from src.apply_helper import _pick_cv as _pck, resolve_form_identity
             form_cv = _pck(Path(cv_path), for_email=False)
+            applicant_name, applicant_email = resolve_form_identity()
             ok = fill_and_submit_form_on_page(
                 page, job_title=job.title,
                 cv_path=form_cv,
                 cover_letter_path=Path(cover_letter_path) if cover_letter_path else None,
-                applicant_name=SMTP_FROM_NAME, applicant_email=SMTP_USER,
+                applicant_name=applicant_name, applicant_email=applicant_email,
                 form_url=apply_url,
                 vacancy_number=job.vacancy_number,
             )
             ext_context.close()
             if ok:
                 LOG.info("  [linkedin] External applied via form for: %s", job.title[:40])
+            else:
+                # External ATS sites usually need their own login / arbitrary fields and
+                # can't be auto-submitted honestly — surface the company link for manual apply.
+                from src.needs_review import record_needs_review
+                record_needs_review(
+                    job.title, apply_url,
+                    ["LinkedIn external application — apply on the company site"],
+                    site="linkedin",
+                )
+                LOG.info("  [linkedin] Flagged for manual review (external): %s -> %s", job.title[:40], apply_url[:60])
             return ok
         except Exception as e:
             LOG.warning("  [linkedin] External apply failed: %s", e)

@@ -12,7 +12,7 @@ from playwright.sync_api import sync_playwright
 from src.sites.base import JobListing, SiteAdapter, matches_job_keywords
 from src.config import (
     JOBS_AF_EMAIL, JOBS_AF_PASSWORD, JOB_KEYWORDS, JOB_EXCLUDE_KEYWORDS,
-    DATA_DIR, PHONE_NUMBER, SMTP_FROM_NAME,
+    DATA_DIR, PHONE_NUMBER,
 )
 from src.log import get_logger
 
@@ -90,7 +90,7 @@ def login_interactive():
     """Open a visible browser for the user to log in manually, then save session.
     Run once:  python -m src.sites.jobs_af
     """
-    print(f"Opening Jobs.af login page in a visible browser ...")
+    print("Opening Jobs.af login page in a visible browser ...")
     print(f"Please log in manually (email: {JOBS_AF_EMAIL})")
     print("The browser will close automatically once login is detected.\n")
     with sync_playwright() as p:
@@ -290,23 +290,42 @@ class JobsAfAdapter(SiteAdapter):
                             if line.startswith("http"):
                                 dest_url = line
                                 break
-                    continue_btn.click()
-                    page.wait_for_timeout(5_000)
-                    LOG.info("  [jobs_af] Redirected to employer site: %s", (dest_url or page.url)[:80])
+                    # "Continue" usually opens the employer form in a NEW TAB — follow it.
+                    target = page
+                    try:
+                        with page.context.expect_page(timeout=6_000) as pinfo:
+                            continue_btn.click()
+                        target = pinfo.value
+                        target.wait_for_load_state("domcontentloaded", timeout=15_000)
+                    except Exception:
+                        page.wait_for_timeout(4_000)  # redirect happened in-page
+                        target = page
+                    target.wait_for_timeout(3_000)
+                    dest_url = dest_url or target.url
+                    LOG.info("  [jobs_af] Redirected to employer site: %s", dest_url[:80])
 
-                    # Now on the employer's career site – try form filling
                     from src.form_filler import fill_and_submit_form_on_page
+                    from src.apply_helper import resolve_form_identity
+                    applicant_name, applicant_email = resolve_form_identity()
                     ok = fill_and_submit_form_on_page(
-                        page, job_title=job.title,
+                        target, job_title=job.title,
                         cv_path=cv, cover_letter_path=Path(cover_letter_path) if cover_letter_path else None,
-                        applicant_name=SMTP_FROM_NAME or "", applicant_email=JOBS_AF_EMAIL,
-                        form_url=page.url,
+                        applicant_name=applicant_name, applicant_email=applicant_email,
+                        form_url=dest_url,
                     )
                     browser.close()
                     if ok:
                         LOG.info("  [jobs_af] Applied on employer site: %s", job.title[:50])
                     else:
-                        LOG.info("  [jobs_af] No form on employer site for: %s", job.title[:50])
+                        # Employer form couldn't be auto-submitted (Google Forms need a Google
+                        # login; ATS sites need their own account) — surface for manual apply.
+                        from src.needs_review import record_needs_review
+                        record_needs_review(
+                            job.title, dest_url,
+                            ["Jobs.af external application — apply on the employer site/form"],
+                            site="jobs_af",
+                        )
+                        LOG.info("  [jobs_af] Flagged for manual review (external): %s -> %s", job.title[:40], dest_url[:60])
                     return ok
 
                 # Direct apply form on Jobs.af itself (no redirect)
@@ -335,8 +354,16 @@ class JobsAfAdapter(SiteAdapter):
                         return True
 
                 browser.close()
-                LOG.info("  [jobs_af] Could not confirm application for: %s", job.title[:50])
-                return submitted
+                # No positive confirmation — do NOT report success (never fake it).
+                # Surface the job so it can be applied to manually.
+                from src.needs_review import record_needs_review
+                record_needs_review(
+                    job.title, job.url or "",
+                    ["Jobs.af application could not be auto-confirmed — open and apply manually"],
+                    site="jobs_af",
+                )
+                LOG.info("  [jobs_af] Could not confirm application; flagged for manual review: %s", job.title[:50])
+                return False
 
         except Exception as e:
             LOG.warning("  [jobs_af] Apply error for %s: %s", job.title[:40], e)

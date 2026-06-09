@@ -114,6 +114,11 @@ LINKEDIN_CHALLENGE_WAIT_SEC = _get_int("LINKEDIN_CHALLENGE_WAIT_SEC", 150)
 LINKEDIN_DISCOVERY_MAX_PAGES = _get_int("LINKEDIN_DISCOVERY_MAX_PAGES", 5)
 LINKEDIN_DISCOVERY_MAX_JOBS_PER_SEARCH = _get_int("LINKEDIN_DISCOVERY_MAX_JOBS_PER_SEARCH", 150)
 
+# Concurrency: how many adapters discover in parallel. Several adapters each launch
+# their own Chromium, so this also bounds peak browser count / memory. Keep modest
+# (default 4) to avoid OOM on normal laptops; raise only on high-RAM machines.
+DISCOVERY_CONCURRENCY = _get_int("DISCOVERY_CONCURRENCY", 4)
+
 # Scope policy
 APPLY_LOCAL_FIRST = _get_bool("APPLY_LOCAL_FIRST", True)
 APPLY_GLOBAL_REMOTE = _get_bool("APPLY_GLOBAL_REMOTE", True)
@@ -124,6 +129,11 @@ APPLY_ATTEMPT_TIMEOUT_SEC = _get_int("APPLY_ATTEMPT_TIMEOUT_SEC", 120)
 JOB_KEYWORDS = [k.strip() for k in _get("JOB_KEYWORDS", "").split(",") if k.strip()]
 JOB_EXCLUDE_KEYWORDS = [k.strip() for k in _get("JOB_EXCLUDE_KEYWORDS", "").split(",") if k.strip()]
 MAX_JOB_AGE_DAYS = _get_int("MAX_JOB_AGE_DAYS", 30)
+
+# Form filling: when False (default), NEVER invent answers (skills, summary, salary,
+# or blind dropdown/radio guesses). Unanswerable required fields cause the job to be
+# skipped and flagged for manual review instead of submitting fabricated data.
+FORM_FILL_GUESS = _get_bool("FORM_FILL_GUESS", False)
 
 # Optional: 2Captcha API key
 CAPTCHA_API_KEY = _get("CAPTCHA_API_KEY")
@@ -145,3 +155,44 @@ LOGS_DIR = _ROOT / "logs"
 def ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def validate_config(*, for_apply: bool = True) -> dict:
+    """Validate configuration and return {"errors": [...], "warnings": [...]}.
+
+    errors   = misconfigurations that prevent applications from being sent.
+    warnings = things that degrade behaviour but don't block a run.
+
+    Pure (no side effects) so callers (CLI startup, GUI) can decide how to surface
+    issues. for_apply=False (discover-only/dry-run) relaxes the apply-only checks.
+    """
+    errors: list = []
+    warnings: list = []
+
+    has_cv = CV_PATH.exists() or bool(CV_PATH_EMAIL and CV_PATH_EMAIL.exists()) \
+        or bool(CV_PATH_FORM and CV_PATH_FORM.exists())
+    if for_apply and not has_cv:
+        errors.append(f"No CV found (CV_PATH={CV_PATH}). Email applications can't attach a resume.")
+
+    if for_apply and not (SMTP_USER and SMTP_PASSWORD):
+        errors.append("SMTP_USER/SMTP_PASSWORD missing — email applications will fail.")
+
+    if (IMAP_USER and not IMAP_PASSWORD) or (IMAP_PASSWORD and not IMAP_USER):
+        warnings.append("IMAP_USER/IMAP_PASSWORD partially set — inbox response checks will be skipped.")
+
+    if for_apply and not (FULL_NAME or FIRST_NAME or SMTP_FROM_NAME):
+        warnings.append("No applicant name set (FULL_NAME/FIRST_NAME) — forms may be filled with a placeholder.")
+
+    if for_apply and not (SUBMISSION_EMAIL or SMTP_USER):
+        warnings.append("No SUBMISSION_EMAIL set — application forms have no contact email to use.")
+
+    if not JOB_KEYWORDS:
+        warnings.append("JOB_KEYWORDS is empty — every discovered job matches (no filtering).")
+
+    if FORM_FILL_GUESS:
+        warnings.append("FORM_FILL_GUESS=true — the bot will invent answers for unknown form fields.")
+
+    if DISCOVERY_CONCURRENCY > 8:
+        warnings.append(f"DISCOVERY_CONCURRENCY={DISCOVERY_CONCURRENCY} is high — may spawn many browsers / high memory.")
+
+    return {"errors": errors, "warnings": warnings}

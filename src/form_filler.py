@@ -4,23 +4,24 @@ Maps applicant name, email, phone, CV, cover letter to common field labels/place
 Handles multi-step wizards, dropdowns, radio buttons, and checkboxes.
 CAPTCHA: If reCAPTCHA/hCaptcha is present, optional 2Captcha API can be used (set CAPTCHA_API_KEY in .env).
 """
-import re
 from pathlib import Path
 from typing import Optional
-
-from playwright.sync_api import sync_playwright
 
 from src.config import (
     SMTP_FROM_NAME, SMTP_USER, CV_PATH, PHONE_NUMBER, PHONE_COUNTRY_CODE,
     LINKEDIN_PROFILE_URL,
     FIRST_NAME, MIDDLE_NAME, LAST_NAME, FULL_NAME, SALUTATION, GENDER,
     COUNTRY, CITY, YEARS_EXPERIENCE, SUBMISSION_EMAIL,
+    FORM_FILL_GUESS,
 )
+from src.needs_review import record_needs_review
 from src.log import get_logger
 
 import random
 
 LOG = get_logger("form")
+
+_GENERIC_SUBMIT_SELECTOR = 'input[type="submit"], button[type="submit"]'
 
 
 def _fill_selects_and_radios(page) -> None:
@@ -60,22 +61,26 @@ def _fill_selects_and_radios(page) -> None:
                             value = opt.get_attribute("value") or t
                             break
 
-                if value is None:
+                # Only guess at unknown dropdowns when explicitly opted in. Blindly
+                # picking option 1 / "yes" / "authorized" can submit FALSE answers to
+                # screening questions (sponsorship, work authorization, etc.).
+                if value is None and FORM_FILL_GUESS:
                     for opt in opts[1:]:
                         text = (opt.inner_text() or opt.get_attribute("value") or "").strip().lower()
                         if text in ("yes", "1", "2", "3", "5", "1 year", "2 years", "3 years", "5 years",
                                     "authorized", "authorised", "i am"):
                             value = opt.get_attribute("value")
                             break
-                if value is None:
+                if value is None and FORM_FILL_GUESS:
                     value = opts[1].get_attribute("value")
                 if value is not None:
                     sel.select_option(value=value)
             except Exception:
-                try:
-                    sel.select_option(index=1)
-                except Exception:
-                    pass
+                if FORM_FILL_GUESS:
+                    try:
+                        sel.select_option(index=1)
+                    except Exception:
+                        pass
         for group in page.query_selector_all('div[role="radiogroup"], fieldset'):
             try:
                 radios = [r for r in group.query_selector_all('input[type="radio"], [role="radio"]') if r.is_visible()]
@@ -93,13 +98,19 @@ def _fill_selects_and_radios(page) -> None:
                                 label_text = (lab.inner_text() or "").lower()
                     except Exception:
                         pass
-                    if "yes" in label_text or "authorized" in label_text or "agree" in label_text:
+                    is_consent = any(t in label_text for t in ("agree", "accept", "consent", "terms", "privacy"))
+                    is_affirmative = "yes" in label_text or "authorized" in label_text
+                    # Honest: clicking a consent/terms option is always fine. Picking an
+                    # affirmative answer (yes/authorized) to an arbitrary question, or the
+                    # first radio in an unlabeled group, is a guess — opt-in only.
+                    if is_consent or (is_affirmative and FORM_FILL_GUESS):
                         r.click()
                         page.wait_for_timeout(200)
                         break
                 else:
-                    radios[0].click()
-                    page.wait_for_timeout(200)
+                    if FORM_FILL_GUESS:
+                        radios[0].click()
+                        page.wait_for_timeout(200)
             except Exception:
                 pass
     except Exception:
@@ -290,15 +301,19 @@ def _fill_required_empty_fields(page, applicant_name: str, applicant_email: str,
                     inp.fill(YEARS_EXPERIENCE)
                 elif "linkedin" in label or "profile url" in label or "portfolio" in label:
                     inp.fill(LINKEDIN_PROFILE_URL or "")
-                elif "stack" in label or "technologies" in label or "skills" in label:
+                # The following fields have no honest source in the user's config, so
+                # they are filled with placeholder/invented content ONLY when the user
+                # opts into guessing. Otherwise they're left empty (and, if required,
+                # the job is flagged for manual review before submit — see caller).
+                elif ("stack" in label or "technologies" in label or "skills" in label) and FORM_FILL_GUESS:
                     inp.fill(random.choice(_TECH_STACKS))
-                elif "language" in label and "program" in label:
+                elif "language" in label and "program" in label and FORM_FILL_GUESS:
                     inp.fill(random.choice(["Python", "JavaScript", "Java", "TypeScript"]))
-                elif input_type == "number" or "gpa" in label:
+                elif (input_type == "number" or "gpa" in label) and FORM_FILL_GUESS:
                     inp.fill(YEARS_EXPERIENCE)
-                elif "salary" in label or "compensation" in label or "expectation" in label:
+                elif ("salary" in label or "compensation" in label or "expectation" in label) and FORM_FILL_GUESS:
                     inp.fill("0")
-                elif "headline" in label or "summary" in label or "about" in label:
+                elif ("headline" in label or "summary" in label or "about" in label) and FORM_FILL_GUESS:
                     inp.fill("Software Engineer with 5+ years of experience in full-stack development")
                 elif "cover" in label or "message" in label:
                     pass
@@ -310,9 +325,21 @@ def _fill_required_empty_fields(page, applicant_name: str, applicant_email: str,
         pass
 
 
+def _is_google_form(page) -> bool:
+    try:
+        url = (page.url or "").lower()
+        return "docs.google.com/forms" in url or "viewform" in url
+    except Exception:
+        return False
+
+
 def _has_application_form(page) -> bool:
     """Check if the page contains a real application form (not just a generic site form)."""
     try:
+        # Google Forms render questions via JS and don't always expose 3+ classic
+        # inputs; recognize them by URL so we engage rather than bail.
+        if _is_google_form(page):
+            return True
         file_inputs = page.query_selector_all('input[type="file"]')
         if file_inputs:
             for fi in file_inputs:
@@ -371,6 +398,79 @@ def _try_click_apply_button(page) -> bool:
     return False
 
 
+_CONFIRMATION_KEYWORDS = (
+    "thank you", "thanks for applying", "application submitted", "application received",
+    "successfully submitted", "we have received", "submission received",
+    "your application has been", "applied successfully", "confirmation",
+)
+
+
+def _submission_confirmed(page, url_before: str, submit_selector: Optional[str] = None) -> bool:
+    """Return True only if there's positive evidence the form was actually submitted.
+
+    Evidence: a confirmation phrase appears, the URL changed (typical post-submit
+    redirect / thank-you page), or the submit control disappeared. Without any of
+    these we must NOT report success — a silent failure recorded as "applied" means
+    the user never applies to that job and it's never retried.
+    """
+    try:
+        if (page.url or "") != (url_before or ""):
+            return True
+    except Exception:
+        pass
+    try:
+        content = (page.content() or "").lower()
+        if any(k in content for k in _CONFIRMATION_KEYWORDS):
+            return True
+    except Exception:
+        pass
+    if submit_selector:
+        try:
+            btn = page.query_selector(submit_selector)
+            if btn is None or not btn.is_visible():
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _unanswered_required_fields(page) -> list:
+    """Return labels of required, visible, still-empty inputs/selects.
+
+    Used to decide whether a form can be submitted honestly. File inputs are
+    excluded (handled separately); checkboxes/radios are excluded (consent handled
+    elsewhere).
+    """
+    labels = []
+    try:
+        selector = (
+            'input[required]:not([type=hidden]), '
+            'select[required], textarea[required], '
+            'input[aria-required="true"], select[aria-required="true"], '
+            'textarea[aria-required="true"]'
+        )
+        for el in page.query_selector_all(selector):
+            try:
+                if not el.is_visible():
+                    continue
+                input_type = (el.get_attribute("type") or "").lower()
+                if input_type in ("file", "hidden", "submit", "button", "checkbox", "radio"):
+                    continue
+                val = ""
+                try:
+                    val = (el.input_value() or "").strip()
+                except Exception:
+                    val = (el.get_attribute("value") or "").strip()
+                if val:
+                    continue
+                labels.append(_get_label(page, el) or input_type or "field")
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return labels
+
+
 def fill_and_submit_form_on_page(
     page,
     job_title: str,
@@ -386,8 +486,8 @@ def fill_and_submit_form_on_page(
     Handles multi-step wizards. Does not open or close the browser.
     Returns True only if meaningful fields were filled AND form was submitted.
     """
-    applicant_name = (applicant_name or SMTP_FROM_NAME or "Applicant").strip()
-    applicant_email = (applicant_email or SMTP_USER or "").strip()
+    applicant_name = (applicant_name or FULL_NAME or SMTP_FROM_NAME or "Applicant").strip()
+    applicant_email = (applicant_email or SUBMISSION_EMAIL or SMTP_USER or "").strip()
     cv_path = cv_path or CV_PATH
     form_url = form_url or (page.url if page else "") or ""
     phone = PHONE_NUMBER or ""
@@ -563,12 +663,19 @@ def fill_and_submit_form_on_page(
                 if fields_filled == 0 and not cv_uploaded:
                     LOG.info("  [form] Submit button found but no fields were filled on: %s", form_url[:80])
                     return False
+                # Honesty gate: if required fields remain empty and we're not guessing,
+                # don't submit a half-filled form — flag it for manual review instead.
+                if not FORM_FILL_GUESS:
+                    missing = _unanswered_required_fields(page)
+                    if missing:
+                        LOG.info("  [form] %s required field(s) can't be filled honestly; "
+                                 "flagging for manual review: %s", len(missing), form_url[:80])
+                        record_needs_review(job_title, form_url, missing[:10])
+                        return False
+                url_before = page.url
                 submit_btn.click()
                 page.wait_for_timeout(4000)
-                content = page.content().lower()
-                if any(k in content for k in ["thank", "submitted", "received", "success", "confirmation"]):
-                    return True
-                return True
+                return _submission_confirmed(page, url_before, _GENERIC_SUBMIT_SELECTOR)
 
             if next_btn:
                 next_btn.click()
@@ -577,15 +684,20 @@ def fill_and_submit_form_on_page(
 
             # No named button: try generic submit only if we filled fields
             if fields_filled > 0 or cv_uploaded:
+                if not FORM_FILL_GUESS:
+                    missing = _unanswered_required_fields(page)
+                    if missing:
+                        LOG.info("  [form] %s required field(s) can't be filled honestly; "
+                                 "flagging for manual review: %s", len(missing), form_url[:80])
+                        record_needs_review(job_title, form_url, missing[:10])
+                        return False
                 try:
-                    fallback = page.query_selector('input[type="submit"], button[type="submit"]')
+                    fallback = page.query_selector(_GENERIC_SUBMIT_SELECTOR)
                     if fallback and fallback.is_visible():
+                        url_before = page.url
                         fallback.click()
                         page.wait_for_timeout(4000)
-                        content = page.content().lower()
-                        if any(k in content for k in ["thank", "submitted", "received", "success"]):
-                            return True
-                        return True
+                        return _submission_confirmed(page, url_before, _GENERIC_SUBMIT_SELECTOR)
                 except Exception:
                     pass
             break
@@ -593,10 +705,13 @@ def fill_and_submit_form_on_page(
         if fields_filled == 0 and not cv_uploaded:
             return False
 
-        content = page.content().lower()
-        if any(k in content for k in ["thank", "submitted", "received", "success"]):
-            return True
-        return False
+        # Reached only if no submit/next button was found after filling. We never
+        # clicked submit, so report success only on explicit confirmation text.
+        try:
+            content = (page.content() or "").lower()
+            return any(k in content for k in _CONFIRMATION_KEYWORDS)
+        except Exception:
+            return False
     except Exception as e:
         LOG.error("  [form] Error: %s", e)
         return False
@@ -615,17 +730,15 @@ def submit_application_form(
     if not form_url.startswith("http"):
         return False
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            from src.browser_utils import new_stealth_context
-            page = new_stealth_context(browser).new_page()
+        from src.browser_utils import browser_session
+        with browser_session() as page:
             page.set_default_timeout(25000)
             page.goto(form_url, wait_until="domcontentloaded", timeout=45000)
             try:
                 page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
                 pass
-            ok = fill_and_submit_form_on_page(
+            return fill_and_submit_form_on_page(
                 page,
                 job_title=job_title,
                 cv_path=cv_path or CV_PATH,
@@ -635,8 +748,6 @@ def submit_application_form(
                 form_url=form_url,
                 vacancy_number=vacancy_number,
             )
-            browser.close()
-            return ok
     except Exception as e:
         LOG.error("  [form] Error: %s", e)
         return False
