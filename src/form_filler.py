@@ -325,9 +325,21 @@ def _fill_required_empty_fields(page, applicant_name: str, applicant_email: str,
         pass
 
 
+def _is_google_form(page) -> bool:
+    try:
+        url = (page.url or "").lower()
+        return "docs.google.com/forms" in url or "viewform" in url
+    except Exception:
+        return False
+
+
 def _has_application_form(page) -> bool:
     """Check if the page contains a real application form (not just a generic site form)."""
     try:
+        # Google Forms render questions via JS and don't always expose 3+ classic
+        # inputs; recognize them by URL so we engage rather than bail.
+        if _is_google_form(page):
+            return True
         file_inputs = page.query_selector_all('input[type="file"]')
         if file_inputs:
             for fi in file_inputs:

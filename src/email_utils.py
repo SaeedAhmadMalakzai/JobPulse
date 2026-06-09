@@ -47,6 +47,27 @@ def _save_to_sent_folder(msg: MIMEMultipart) -> None:
         LOG.warning("  [IMAP] Could not save to Sent folder: %s: %s", type(e).__name__, e)
 
 
+SMTP_TIMEOUT = 25  # seconds — bound connect/handshake so a blocked port fails fast
+
+
+def _is_auth_error(err: str) -> bool:
+    e = err.lower()
+    return "authentication" in e or "535" in e or "badcredentials" in e or "auth" in e and "login" in e
+
+
+def _deliver(host: str, port: int, user: str, password: str, to_email: str, msg: MIMEMultipart) -> None:
+    """Send via one (host, port). Port 465 uses implicit SSL; others use STARTTLS."""
+    if port == 465:
+        with smtplib.SMTP_SSL(host, port, timeout=SMTP_TIMEOUT) as smtp:
+            smtp.login(user, password)
+            smtp.sendmail(user, to_email, msg.as_string())
+    else:
+        with smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT) as smtp:
+            smtp.starttls()
+            smtp.login(user, password)
+            smtp.sendmail(user, to_email, msg.as_string())
+
+
 def send_application_email(
     to_email: str,
     subject: str,
@@ -77,33 +98,32 @@ def send_application_email(
             part.add_header("Content-Disposition", "attachment", filename=p.name)
             msg.attach(part)
 
-    last_error = None
-    for attempt in range(3):
-        try:
-            if SMTP_PORT == 465:
-                with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as smtp:
-                    smtp.login(SMTP_USER, SMTP_PASSWORD)
-                    smtp.sendmail(SMTP_USER, to_email, msg.as_string())
-            else:
-                with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
-                    smtp.starttls()
-                    smtp.login(SMTP_USER, SMTP_PASSWORD)
-                    smtp.sendmail(SMTP_USER, to_email, msg.as_string())
+    # Try the configured port first; if it's the STARTTLS submission port and the
+    # connection fails (e.g. 587 blocked by the network), fall back to implicit SSL
+    # on 465, which many networks/ISPs leave open.
+    endpoints = [(SMTP_HOST, SMTP_PORT)]
+    if SMTP_PORT != 465:
+        endpoints.append((SMTP_HOST, 465))
 
-            # Save a copy to your Sent folder (Riseup/others don't do this when sending via SMTP from a script)
-            _save_to_sent_folder(msg)
-            return True
-        except Exception as e:
-            last_error = e
-            err = str(e).lower()
-            # Don't retry auth failures
-            if "authentication" in err or "535" in err or "badcredentials" in err:
-                LOG.warning("  [SMTP] Send failed: Gmail rejected login. Use an App Password: https://support.google.com/accounts/answer/185833")
-                return False
-            if attempt < 2:
-                time.sleep(2)
+    last_error = None
+    for host, port in endpoints:
+        for attempt in range(2):
+            try:
+                _deliver(host, port, SMTP_USER, SMTP_PASSWORD, to_email, msg)
+                _save_to_sent_folder(msg)
+                if port != SMTP_PORT:
+                    LOG.info("  [SMTP] Sent via fallback port %s (configured %s was unreachable).", port, SMTP_PORT)
+                return True
+            except Exception as e:
+                last_error = e
+                if _is_auth_error(str(e)):
+                    LOG.warning("  [SMTP] Send failed: login rejected. For Gmail use a 16-char App Password: https://support.google.com/accounts/answer/185833")
+                    return False  # auth won't be fixed by retry or fallback
+                if attempt == 0:
+                    time.sleep(2)
     if last_error:
-        LOG.warning("  [SMTP] Send failed after 3 attempts: %s: %s", type(last_error).__name__, last_error)
+        LOG.warning("  [SMTP] Send failed (tried %s): %s: %s",
+                    ", ".join(f"{h}:{p}" for h, p in endpoints), type(last_error).__name__, last_error)
     return False
 
 

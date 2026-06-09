@@ -227,9 +227,24 @@ class AcbarAdapter(SiteAdapter):
                     applicant_email=applicant_email,
                     vacancy_number=job.vacancy_number,
                 )
+                if not ok:
+                    # Couldn't auto-submit (e.g. Google Form file-upload needs a Google
+                    # login, or unanswerable required questions) — surface for manual apply
+                    # instead of silently dropping it.
+                    from src.needs_review import record_needs_review
+                    record_needs_review(
+                        job.title, apply_url,
+                        ["Form could not be auto-submitted — apply manually"], site="acbar",
+                    )
+                    LOG.info("  [acbar] Flagged for manual review (form): %s -> %s", job.title[:40], apply_url[:60])
                 return ok
 
             LOG.warning("  [acbar] No submission email or form link on page: %s...", job.title[:50])
+            from src.needs_review import record_needs_review
+            record_needs_review(
+                job.title, job.url,
+                ["No submission email/form auto-detected — open the post and apply"], site="acbar",
+            )
             return False
         except Exception as e:
             LOG.error("  [acbar] Error applying to %s: %s", job.title[:40], e)
