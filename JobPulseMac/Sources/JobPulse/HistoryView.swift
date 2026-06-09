@@ -6,19 +6,24 @@ struct HistoryView: View {
     var body: some View {
         Group {
             if state.history.isEmpty {
-                EmptyState(icon: "clock", text: "No run history yet.")
+                EmptyState(icon: "clock.arrow.circlepath", title: "No run history yet",
+                           message: "Each completed run records how many jobs were applied and skipped.")
             } else {
-                List(state.history) { run in
-                    HStack {
-                        Image(systemName: "clock.arrow.circlepath").foregroundStyle(.secondary)
-                        Text(formatted(run.at)).fontWeight(.medium)
-                        Spacer()
-                        Label("\(run.applied)", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(Theme.Status.success)
-                        Label("\(run.skipped)", systemImage: "minus.circle")
-                            .foregroundStyle(.orange)
+                ScrollView {
+                    LazyVStack(spacing: Theme.Space.sm) {
+                        ForEach(state.history) { run in
+                            RowCard {
+                                HStack(spacing: Theme.Space.md) {
+                                    IconChip(icon: "clock", tint: .secondary)
+                                    Text(formatted(run.at)).fontWeight(.medium)
+                                    Spacer()
+                                    metric("checkmark.circle.fill", "\(run.applied)", Theme.Status.success)
+                                    metric("minus.circle", "\(run.skipped)", .orange)
+                                }
+                            }
+                        }
                     }
-                    .padding(.vertical, 2)
+                    .padding(Theme.Space.md)
                 }
             }
         }
@@ -30,8 +35,13 @@ struct HistoryView: View {
         }
     }
 
+    private func metric(_ icon: String, _ value: String, _ tint: Color) -> some View {
+        Label(value, systemImage: icon)
+            .font(.callout.weight(.semibold).monospacedDigit())
+            .foregroundStyle(tint)
+    }
+
     private func formatted(_ iso: String) -> String {
-        // Engine stores ISO-ish timestamps; show date + HH:MM if parseable.
         let trimmed = iso.replacingOccurrences(of: "T", with: " ")
         return String(trimmed.prefix(16))
     }

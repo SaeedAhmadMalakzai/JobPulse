@@ -25,16 +25,14 @@ struct HomeView: View {
 
     // MARK: header
     private var header: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("JobPulse").font(.largeTitle.bold())
-                Text("Automated job discovery & applications")
-                    .foregroundStyle(.secondary)
+        VStack(spacing: Theme.Space.md) {
+            HeroBanner(title: "JobPulse", subtitle: "Automated job discovery & applications")
+            HStack(spacing: Theme.Space.md) {
+                StatCard(value: "\(state.totalApplied)", label: "Applied (total)", icon: "checkmark.seal.fill",
+                         tint: Theme.Status.success)
+                StatCard(value: "\(state.needsReview.count)", label: "Needs review", icon: "exclamationmark.bubble.fill",
+                         tint: state.needsReview.isEmpty ? .secondary : Theme.Status.warning)
             }
-            Spacer()
-            StatCard(value: "\(state.totalApplied)", label: "Applied (total)")
-            StatCard(value: "\(state.needsReview.count)", label: "Needs review",
-                     tint: state.needsReview.isEmpty ? .secondary : Theme.Status.warning)
         }
     }
 
@@ -120,15 +118,31 @@ struct HomeView: View {
 struct StatCard: View {
     let value: String
     let label: String
+    var icon: String = ""
     var tint: Color = .primary
     var body: some View {
-        VStack(alignment: .trailing, spacing: 2) {
-            Text(value).font(.title.bold().monospacedDigit()).foregroundStyle(tint)
-            Text(label.uppercased()).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+        HStack(spacing: Theme.Space.sm) {
+            if !icon.isEmpty {
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 38, height: 38)
+                    .background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(value).font(.title2.bold().monospacedDigit())
+                Text(label.uppercased()).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, Theme.Space.md)
-        .padding(.vertical, Theme.Space.sm)
+        .padding(.vertical, Theme.Space.sm + 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                .strokeBorder(.separator.opacity(0.4), lineWidth: 1)
+        )
     }
 }
 
