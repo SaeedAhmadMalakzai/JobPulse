@@ -1,0 +1,5 @@
+.build/
+JobPulse.app/
+*.xcodeproj
+.swiftpm/
+DerivedData/
