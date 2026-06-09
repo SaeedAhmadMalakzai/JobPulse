@@ -612,23 +612,37 @@ class LinkedInJobsAdapter(SiteAdapter):
                         if href in seen:
                             continue
                         seen.add(href)
+                        # Read the WHOLE card via closest() — its text reads
+                        # "Title\nTitle\nCompany\nLocation". lines[0] is the title; the first
+                        # line that isn't the (repeated) title is the company. This is robust to
+                        # LinkedIn's hashed/obfuscated CSS class names. (Search cards carry no
+                        # per-job posted date; the search itself is filtered to the last 30 days
+                        # via f_TPR, so posted_date is left None rather than guessed.)
                         title = ""
+                        company = ""
                         try:
-                            card = a.locator(
-                                "xpath=ancestor::div[contains(@class, 'job') or "
-                                "contains(@class, 'card') or contains(@class, 'base-card')][1]"
-                            )
-                            title = card.locator(
-                                ".job-card-list__title, .base-search-card__title, h3"
-                            ).first.inner_text(timeout=2000)
+                            card_el = a.evaluate_handle(
+                                "el => el.closest('li, div[class*=card], div[class*=job]')"
+                            ).as_element()
+                            if card_el:
+                                lines = [ln.strip() for ln in (card_el.inner_text() or "").split("\n") if ln.strip()]
+                                if lines:
+                                    title = lines[0]
+                                    head = title.lower()
+                                    for ln in lines[1:]:
+                                        if ln.lower() != head and len(ln) > 1:
+                                            company = ln
+                                            break
                         except Exception:
+                            pass
+                        if not title:
                             title = a.get_attribute("aria-label") or (a.inner_text() or "").splitlines()[0]
                         title = _clean_text(title or "Job")
                         if len(title) < 3:
                             continue
                         job_id = "linkedin_" + hashlib.sha256(href.encode()).hexdigest()[:14]
                         jobs.append(JobListing(
-                            id=job_id, title=title, company="", url=href, location="",
+                            id=job_id, title=title, company=_clean_text(company), url=href, location="",
                         ))
                     except Exception:
                         continue
