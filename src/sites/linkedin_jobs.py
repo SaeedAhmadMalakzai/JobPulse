@@ -30,7 +30,6 @@ from src.config import (
     LINKEDIN_CHALLENGE_WAIT_SEC,
     LOGS_DIR,
     ensure_dirs,
-    SMTP_FROM_NAME,
     SMTP_USER,
     LINKEDIN_PROFILE_URL,
 )
@@ -683,6 +682,12 @@ class LinkedInJobsAdapter(SiteAdapter):
 
             LOG.info("  [linkedin] No apply path found for: %s", job.title[:60])
             _save_debug_artifact(page, job, "no_apply_path")
+            from src.needs_review import record_needs_review
+            record_needs_review(
+                job.title, job.url or "",
+                ["LinkedIn — no automatic apply path; open the job and apply manually"],
+                site="linkedin",
+            )
             return False
         except Exception as e:
             LOG.error("  [linkedin] Apply error: %s", e)
@@ -952,6 +957,12 @@ class LinkedInJobsAdapter(SiteAdapter):
             except Exception as e:
                 LOG.warning("  [linkedin] External page load failed for %s: %s", apply_url[:60], e)
                 ext_context.close()
+                from src.needs_review import record_needs_review
+                record_needs_review(
+                    job.title, apply_url,
+                    ["LinkedIn external application (page didn't load) — apply on the company site"],
+                    site="linkedin",
+                )
                 return False
             page.wait_for_timeout(3000)
             try:
@@ -974,19 +985,30 @@ class LinkedInJobsAdapter(SiteAdapter):
                 if ok:
                     LOG.info("  [linkedin] External applied via email to %s for: %s", to_email, job.title[:40])
                 return ok
-            from src.apply_helper import _pick_cv as _pck
+            from src.apply_helper import _pick_cv as _pck, resolve_form_identity
             form_cv = _pck(Path(cv_path), for_email=False)
+            applicant_name, applicant_email = resolve_form_identity()
             ok = fill_and_submit_form_on_page(
                 page, job_title=job.title,
                 cv_path=form_cv,
                 cover_letter_path=Path(cover_letter_path) if cover_letter_path else None,
-                applicant_name=SMTP_FROM_NAME, applicant_email=SMTP_USER,
+                applicant_name=applicant_name, applicant_email=applicant_email,
                 form_url=apply_url,
                 vacancy_number=job.vacancy_number,
             )
             ext_context.close()
             if ok:
                 LOG.info("  [linkedin] External applied via form for: %s", job.title[:40])
+            else:
+                # External ATS sites usually need their own login / arbitrary fields and
+                # can't be auto-submitted honestly — surface the company link for manual apply.
+                from src.needs_review import record_needs_review
+                record_needs_review(
+                    job.title, apply_url,
+                    ["LinkedIn external application — apply on the company site"],
+                    site="linkedin",
+                )
+                LOG.info("  [linkedin] Flagged for manual review (external): %s -> %s", job.title[:40], apply_url[:60])
             return ok
         except Exception as e:
             LOG.warning("  [linkedin] External apply failed: %s", e)
