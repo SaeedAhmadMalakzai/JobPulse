@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jobpulse"
+version = "1.1.0"
+description = "Automated job discovery and application desktop app"
+requires-python = ">=3.10,<4.0"
+readme = "README.md"
+license = { text = "MIT" }
+
+[tool.pytest.ini_options]
+# Make `import src.xxx` work without installing the package.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "unit: fast isolated unit tests",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"

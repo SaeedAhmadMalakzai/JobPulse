@@ -283,15 +283,13 @@ class MainWindow(QMainWindow):
         splitter = QSplitter()
         splitter.setChildrenCollapsible(False)
 
-        # Left: tabs
-        tabs = QTabWidget()
-        tabs.setDocumentMode(True)
-        tabs.addTab(self._build_dashboard(), "  Dashboard  ")
-        tabs.addTab(self._build_keywords_tab(), "  Keywords  ")
-        tabs.addTab(self._build_accounts_tab(), "  Accounts  ")
-        tabs.addTab(self._build_settings_tab(), "  Settings  ")
-        tabs.currentChanged.connect(self._on_tab_changed)
-        splitter.addWidget(tabs)
+        # Left: a two-page navigation stack — an action-first Home, and an
+        # "Advanced" drawer that holds the existing Keywords/Accounts/Settings tabs.
+        # (Linear flow: most runs only need Home; configuration is one click away.)
+        self._nav_stack = QStackedWidget()
+        self._nav_stack.addWidget(self._build_dashboard())   # index 0: Home
+        self._nav_stack.addWidget(self._build_advanced())    # index 1: Advanced
+        splitter.addWidget(self._nav_stack)
 
         # Right: activity feed + results
         right = QWidget()
@@ -491,7 +489,7 @@ class MainWindow(QMainWindow):
     # ── System tray ──────────────────────────────────────────────────────────
 
     def _setup_tray(self) -> None:
-        from PySide6.QtGui import QIcon, QAction
+        from PySide6.QtGui import QAction
         from PySide6.QtWidgets import QSystemTrayIcon, QMenu
         self._tray = QSystemTrayIcon(self)
         tray_icon = getattr(self, "_app_icon", None)
@@ -621,6 +619,31 @@ class MainWindow(QMainWindow):
         h_layout.addWidget(shortcut_lbl)
         layout.addWidget(header)
 
+        # ── Setup readiness strip (linear onboarding: CV · Email · Roles) ──
+        setup_card = QFrame()
+        setup_card.setObjectName("setupCard")
+        setup_card.setStyleSheet(
+            "QFrame#setupCard { background: rgba(99,102,241,0.06); border: 1px solid rgba(99,102,241,0.18);"
+            " border-radius: 10px; }"
+        )
+        setup_layout = QHBoxLayout(setup_card)
+        setup_layout.setContentsMargins(12, 8, 12, 8)
+        setup_layout.setSpacing(10)
+        self._setup_cv_lbl = QLabel("①  CV")
+        self._setup_email_lbl = QLabel("②  Email")
+        self._setup_roles_lbl = QLabel("③  Roles")
+        for lbl in (self._setup_cv_lbl, self._setup_email_lbl, self._setup_roles_lbl):
+            lbl.setStyleSheet("font-size: 12px;")
+            setup_layout.addWidget(lbl)
+        setup_layout.addStretch()
+        setup_btn = QPushButton("Set up  →")
+        setup_btn.setObjectName("setupBtn")
+        setup_btn.setFixedHeight(26)
+        setup_btn.setToolTip("Open Keywords / Accounts / Settings.")
+        setup_btn.clicked.connect(self._go_to_advanced)
+        setup_layout.addWidget(setup_btn)
+        layout.addWidget(setup_card)
+
         # ── Dry-run checkbox ──────────────────────────────────────────────
         self._dry_run_cb = QCheckBox("  Dry run — discover jobs only, no applications sent")
         self._dry_run_cb.setToolTip(
@@ -630,9 +653,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._dry_run_cb)
 
         # ── Action buttons ────────────────────────────────────────────────
-        self._start_btn = QPushButton("🚀   Start Run")
+        self._start_btn = QPushButton("▶   Run")
         self._start_btn.setObjectName("startBtn")
-        self._start_btn.setToolTip("Save all tabs and start the job discovery and application run.  [Ctrl+Enter]")
+        self._start_btn.setToolTip("Save settings and start discovery + applications.  [Ctrl+Enter]")
         self._start_btn.clicked.connect(self._on_start)
 
         self._stop_btn = QPushButton("■   Stop")
@@ -642,10 +665,6 @@ class MainWindow(QMainWindow):
         self._stop_btn.setEnabled(False)
 
         layout.addWidget(self._start_btn)
-        self._run_again_btn = QPushButton("🔄   Run Again")
-        self._run_again_btn.setToolTip("Run again with current settings (same as Start).")
-        self._run_again_btn.clicked.connect(self._on_start)
-        layout.addWidget(self._run_again_btn)
         layout.addWidget(self._stop_btn)
 
         layout.addWidget(_make_separator())
@@ -676,6 +695,14 @@ class MainWindow(QMainWindow):
         view_results_btn.setToolTip("Switch to the Results panel (Applied / Skipped jobs).")
         view_results_btn.clicked.connect(self._go_to_results)
         layout.addWidget(view_results_btn)
+
+        self._needs_review_btn = QPushButton("📋   Needs Review (apply manually)")
+        self._needs_review_btn.setToolTip(
+            "Jobs the bot skipped because the form needed answers it won't fabricate.\n"
+            "Open each and apply manually."
+        )
+        self._needs_review_btn.clicked.connect(self._show_needs_review)
+        layout.addWidget(self._needs_review_btn)
 
         layout.addWidget(_make_separator())
 
@@ -788,6 +815,39 @@ class MainWindow(QMainWindow):
         self._stats_month_label.setText(str(month_applied))
         self._update_tray_tooltip()
 
+        # Reflect the needs-review backlog on its button.
+        if getattr(self, "_needs_review_btn", None) is not None:
+            try:
+                from src.needs_review import load_needs_review
+                n = len(load_needs_review())
+                self._needs_review_btn.setText(
+                    f"📋   Needs Review ({n})" if n else "📋   Needs Review (apply manually)"
+                )
+            except Exception:
+                pass
+
+        self._refresh_setup_strip()
+
+    def _refresh_setup_strip(self) -> None:
+        """Update the CV / Email / Roles readiness indicators on Home."""
+        if getattr(self, "_setup_cv_lbl", None) is None:
+            return
+        env = load_env()
+
+        def mark(lbl, text: str, ok: bool) -> None:
+            tick = "✓" if ok else "•"
+            color = "#059669" if ok else "#94a3b8"
+            weight = "600" if ok else "400"
+            lbl.setText(f"{tick}  {text}")
+            lbl.setStyleSheet(f"font-size: 12px; color: {color}; font-weight: {weight};")
+
+        cv_ok = bool((env.get("CV_PATH") or "").strip())
+        email_ok = bool((env.get("SMTP_USER") or "").strip() and (env.get("SMTP_PASSWORD") or "").strip())
+        roles = [k for k in (env.get("JOB_KEYWORDS") or "").split(",") if k.strip()]
+        mark(self._setup_cv_lbl, "CV", cv_ok)
+        mark(self._setup_email_lbl, "Email", email_ok)
+        mark(self._setup_roles_lbl, f"Roles ({len(roles)})", bool(roles))
+
     def _check_for_updates(self) -> None:
         import urllib.request
         try:
@@ -805,6 +865,36 @@ class MainWindow(QMainWindow):
             QDesktopServices.openUrl(QUrl(url))
         except Exception as e:
             QMessageBox.warning(self, "Check for Updates", f"Could not check: {e}")
+
+    # ── Advanced drawer (holds the config tabs) ────────────────────────────────
+
+    def _build_advanced(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(6)
+        back = QPushButton("←  Back to Home")
+        back.setObjectName("backBtn")
+        back.setFixedHeight(28)
+        back.clicked.connect(self._go_home)
+        lay.addWidget(back, alignment=Qt.AlignmentFlag.AlignLeft)
+        # self._tabs is reused by _warn_smtp_app_password to jump to Settings.
+        self._tabs = QTabWidget()
+        self._tabs.setDocumentMode(True)
+        self._tabs.addTab(self._build_keywords_tab(), "  Keywords  ")
+        self._tabs.addTab(self._build_accounts_tab(), "  Accounts  ")
+        self._tabs.addTab(self._build_settings_tab(), "  Settings  ")
+        lay.addWidget(self._tabs, 1)
+        return w
+
+    def _go_to_advanced(self) -> None:
+        if getattr(self, "_nav_stack", None) is not None:
+            self._nav_stack.setCurrentIndex(1)
+
+    def _go_home(self) -> None:
+        self._refresh_dashboard_summary()
+        if getattr(self, "_nav_stack", None) is not None:
+            self._nav_stack.setCurrentIndex(0)
 
     # ── Keywords tab ──────────────────────────────────────────────────────────
 
@@ -1519,6 +1609,62 @@ class MainWindow(QMainWindow):
         if index == 0:
             self._refresh_dashboard_summary()
 
+    def _show_needs_review(self) -> None:
+        """List jobs skipped because their form needed answers we won't fabricate.
+
+        Double-click an entry to open the application page in the browser.
+        """
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QDialogButtonBox
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        from src.needs_review import load_needs_review
+
+        entries = load_needs_review()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Needs Review — apply manually")
+        dlg.resize(560, 420)
+        layout = QVBoxLayout(dlg)
+        if entries:
+            note = QLabel(
+                "These jobs were skipped because the application form had required fields "
+                "the bot couldn't fill honestly. Double-click to open and apply manually."
+            )
+        else:
+            note = QLabel("Nothing needs manual review right now. 🎉")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #64748b; font-size: 12px;")
+        layout.addWidget(note)
+
+        lst = QListWidget()
+        url_by_row = []
+        for e in entries:
+            reasons = ", ".join(e.get("reasons") or [])[:120]
+            title = e.get("title") or "(untitled)"
+            site = e.get("site") or ""
+            label = f"  {title}"
+            if site:
+                label += f"   [{site}]"
+            if reasons:
+                label += f"\n      needs: {reasons}"
+            item = QListWidgetItem(label)
+            lst.addItem(item)
+            url_by_row.append(e.get("url") or "")
+        layout.addWidget(lst)
+
+        def _open_row(item):
+            row = lst.row(item)
+            url = url_by_row[row] if 0 <= row < len(url_by_row) else ""
+            if url:
+                QDesktopServices.openUrl(QUrl(url))
+
+        lst.itemDoubleClicked.connect(_open_row)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        btns.rejected.connect(dlg.reject)
+        btns.accepted.connect(dlg.accept)
+        layout.addWidget(btns)
+        dlg.exec()
+
     def _open_help(self) -> None:
         from PySide6.QtGui import QDesktopServices
         from PySide6.QtCore import QUrl
@@ -1798,9 +1944,9 @@ class MainWindow(QMainWindow):
             from PySide6.QtCore import QUrl
             QDesktopServices.openUrl(QUrl("https://support.google.com/accounts/answer/185833"))
         elif clicked is settings_btn:
-            tabs = self.findChild(QTabWidget)
-            if tabs:
-                tabs.setCurrentIndex(3)  # Settings tab
+            self._go_to_advanced()
+            if getattr(self, "_tabs", None) is not None:
+                self._tabs.setCurrentIndex(2)  # Keywords=0, Accounts=1, Settings=2
 
     def _play_finish_sound(self) -> None:
         env = load_env()

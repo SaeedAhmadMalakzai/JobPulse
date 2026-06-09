@@ -3,6 +3,7 @@ import email
 import imaplib
 import smtplib
 import time
+from datetime import datetime, timedelta
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -42,8 +43,8 @@ def _save_to_sent_folder(msg: MIMEMultipart) -> None:
                     return
                 except imaplib.IMAP4.error:
                     continue
-    except Exception:
-        pass
+    except Exception as e:
+        LOG.warning("  [IMAP] Could not save to Sent folder: %s: %s", type(e).__name__, e)
 
 
 def send_application_email(
@@ -118,11 +119,16 @@ def check_inbox_for_responses(since_days: int = 7) -> List[dict]:
         with imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT) as imap:
             imap.login(IMAP_USER, IMAP_PASSWORD)
             imap.select("INBOX")
-            # Search last N days (approximate)
-            _, msg_ids = imap.search(None, "ALL")
-            id_list = msg_ids[0].split()
-            # Take last 100 to avoid huge fetch
-            for uid in id_list[-100:]:
+            # Server-side date filter: only messages newer than since_days. IMAP SINCE
+            # expects "DD-Mon-YYYY" (e.g. 02-Jun-2026).
+            since_str = (datetime.now() - timedelta(days=max(1, since_days))).strftime("%d-%b-%Y")
+            typ, msg_ids = imap.search(None, "SINCE", since_str)
+            if typ != "OK" or not msg_ids or not msg_ids[0]:
+                # Fall back to recent ALL if SINCE is unsupported/empty.
+                typ, msg_ids = imap.search(None, "ALL")
+            id_list = msg_ids[0].split() if (msg_ids and msg_ids[0]) else []
+            # Cap fetch to most recent 200 to bound work on large mailboxes.
+            for uid in id_list[-200:]:
                 try:
                     _, data = imap.fetch(uid, "(RFC822)")
                     raw = data[0][1]
@@ -130,6 +136,8 @@ def check_inbox_for_responses(since_days: int = 7) -> List[dict]:
                     subject = msg.get("Subject", "")
                     from_ = msg.get("From", "")
                     date = msg.get("Date", "")
+                    # Stable id for de-duplicating alerts across runs.
+                    msg_id = (msg.get("Message-ID") or msg.get("Message-Id") or "").strip()
                     body = ""
                     if msg.is_multipart():
                         for part in msg.walk():
@@ -143,13 +151,15 @@ def check_inbox_for_responses(since_days: int = 7) -> List[dict]:
                         if payload:
                             body = payload.decode("utf-8", errors="replace")[:500]
                     results.append({
+                        "id": msg_id or f"{from_}|{subject}|{date}",
                         "subject": subject,
                         "from": from_,
                         "date": date,
                         "snippet": body or "(no body)",
                     })
-                except Exception:
+                except Exception as e:
+                    LOG.warning("  [IMAP] Skipped a message (fetch/parse error): %s", type(e).__name__)
                     continue
-    except Exception:
-        pass
+    except Exception as e:
+        LOG.warning("  [IMAP] Inbox check failed: %s: %s", type(e).__name__, e)
     return results

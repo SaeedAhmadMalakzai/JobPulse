@@ -2,11 +2,10 @@
 from pathlib import Path
 from typing import Optional
 
-from playwright.sync_api import sync_playwright
-
 from src.config import (
     SMTP_FROM_NAME, SMTP_USER, ONLINE_RESUME_URL,
     CV_PATH_EMAIL, CV_PATH_FORM,
+    FULL_NAME, SUBMISSION_EMAIL,
 )
 from src.email_utils import send_application_email
 from src.form_filler import fill_and_submit_form_on_page
@@ -14,6 +13,19 @@ from src.job_page_utils import extract_apply_from_page, extract_vacancy_number
 from src.log import get_logger
 
 LOG = get_logger("apply_helper")
+
+
+def resolve_form_identity() -> tuple:
+    """Return (name, email) to use on application forms.
+
+    Prefers the dedicated applicant fields (FULL_NAME / SUBMISSION_EMAIL) and only
+    falls back to the SMTP sender identity. Previously forms were filled with the
+    SMTP login + SMTP_FROM_NAME (default "Applicant"), putting the wrong contact
+    details on real applications.
+    """
+    name = (FULL_NAME or SMTP_FROM_NAME or "").strip()
+    email = (SUBMISSION_EMAIL or SMTP_USER or "").strip()
+    return name, email
 
 
 def _pick_cv(base_cv: Path, for_email: bool) -> Path:
@@ -69,17 +81,16 @@ def apply_via_browser(
     if not cv.exists():
         LOG.warning("  [%s] CV not found: %s", adapter_name, cv_path)
         return False
+    applicant_name, applicant_email = resolve_form_identity()
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            from src.browser_utils import new_stealth_context
-            page = new_stealth_context(browser).new_page()
+        from src.browser_utils import browser_session
+        # browser_session guarantees teardown and enforces the global concurrency cap.
+        with browser_session() as page:
             page.set_default_timeout(30000)
             try:
                 page.goto(job_url, wait_until="domcontentloaded", timeout=45000)
             except Exception as e:
                 LOG.warning("  [%s] Could not load page %s: %s", adapter_name, job_url[:60], e)
-                browser.close()
                 return False
             page.wait_for_timeout(2000)
             try:
@@ -96,7 +107,6 @@ def apply_via_browser(
                 email_cv = _pick_cv(cv, for_email=True)
                 body = _build_email_body(job_title, cover_letter_path, vacancy_number)
                 subject = _build_email_subject(job_title, vacancy_number)
-                browser.close()
                 ok = send_application_email(
                     to_email, subject, body,
                     cv_path=email_cv,
@@ -118,11 +128,10 @@ def apply_via_browser(
                 page, job_title=job_title,
                 cv_path=form_cv,
                 cover_letter_path=Path(cover_letter_path) if cover_letter_path else None,
-                applicant_name=SMTP_FROM_NAME, applicant_email=SMTP_USER,
+                applicant_name=applicant_name, applicant_email=applicant_email,
                 form_url=form_url or job_url,
                 vacancy_number=vacancy_number,
             )
-            browser.close()
             if ok:
                 LOG.info("  [%s] Applied via form for: %s", adapter_name, job_title[:40])
             else:

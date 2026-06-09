@@ -2,7 +2,6 @@
 import signal
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
 from typing import Dict, List, Tuple
 
 from src.config import (
@@ -19,12 +18,13 @@ from src.config import (
     LINKEDIN_APPLY_TIMEOUT_SEC,
     MAX_JOB_AGE_DAYS,
     MAX_APPLICATIONS_PER_RUN,
+    DISCOVERY_CONCURRENCY,
     DRY_RUN,
 )
 from src.applied_store import load_applied_ids, load_applied_keys, mark_applied
 from src.applied_store import _normalize_key as _job_key
 from src.job_utils import is_job_expired, is_job_too_old, should_apply_by_scope, job_scope_priority
-from src.sites.base import JobListing, SiteAdapter
+from src.sites.base import JobListing, SiteAdapter, interpret_apply_result
 from src.sites.unjobs import UnjobsAdapter
 from src.sites.jobs_af import JobsAfAdapter
 from src.sites.acbar import AcbarAdapter
@@ -125,8 +125,6 @@ def run_discover_and_apply() -> dict:
     applied = load_applied_ids()
     applied_keys = load_applied_keys()
     applied_urls_this_run: set = set()  # avoid applying twice to same URL in one run
-    cv_email = str(CV_PATH_EMAIL) if CV_PATH_EMAIL and CV_PATH_EMAIL.exists() else str(CV_PATH)
-    cv_form = str(CV_PATH_FORM) if CV_PATH_FORM and CV_PATH_FORM.exists() else str(CV_PATH)
     cv = str(CV_PATH)
     has_cv = CV_PATH.exists() or (
         bool(CV_PATH_EMAIL) and CV_PATH_EMAIL.exists()
@@ -141,7 +139,7 @@ def run_discover_and_apply() -> dict:
     # Parallel discovery
     LOG.info("Discovering jobs from %s site(s)...", len(adapters))
     adapter_to_jobs: Dict[str, Tuple[SiteAdapter, List[JobListing]]] = {}
-    with ThreadPoolExecutor(max_workers=min(12, len(adapters))) as ex:
+    with ThreadPoolExecutor(max_workers=max(1, min(DISCOVERY_CONCURRENCY, len(adapters)))) as ex:
         futures = {ex.submit(_discover_one, a): a for a in adapters}
         for fut in as_completed(futures):
             adapter = futures[fut]
@@ -222,12 +220,23 @@ def run_discover_and_apply() -> dict:
             try:
                 cover_path = write_cover_letter_for_job(job)
                 cover = str(cover_path) if cover_path else (str(COVER_LETTER_PATH) if COVER_LETTER_PATH.exists() else None)
-                ok = None
+                result = None
                 timeout_sec = LINKEDIN_APPLY_TIMEOUT_SEC if adapter.name == "linkedin_jobs" else APPLY_ATTEMPT_TIMEOUT_SEC
+                # IDEMPOTENCY: apply() is not guaranteed idempotent — if it sent an
+                # email or submitted a form and *then* threw, retrying would send a
+                # duplicate. So we retry ONLY timeouts (which almost always fire during
+                # page load/navigation, before any send) and explicit TRANSIENT_ERROR
+                # outcomes. Any other exception aborts this job after one attempt.
                 for attempt in range(3):
                     try:
                         with _time_limit(timeout_sec):
-                            ok = adapter.apply(job, cv, cover)
+                            result = adapter.apply(job, cv, cover)
+                        _, retryable = interpret_apply_result(result)
+                        if retryable and attempt < 2:
+                            LOG.warning("  [%s] Apply attempt %s returned transient error, retrying in 5s",
+                                        adapter.name, attempt + 1)
+                            time.sleep(5)
+                            continue
                         break
                     except ApplyTimeoutError as timeout_err:
                         if attempt < 2:
@@ -236,13 +245,11 @@ def run_discover_and_apply() -> dict:
                             time.sleep(5)
                         else:
                             raise
-                    except Exception as attempt_err:
-                        if attempt < 2:
-                            LOG.warning("  [%s] Apply attempt %s failed, retrying in 5s: %s", adapter.name, attempt + 1, attempt_err)
-                            time.sleep(5)
-                        else:
-                            raise
-                if ok:
+                    except Exception:
+                        # Do NOT retry: a post-send exception could double-apply.
+                        raise
+                applied_ok, _ = interpret_apply_result(result)
+                if applied_ok:
                     mark_applied(job.id, adapter.name, job.title, job.company)
                     applied.add(job.id)
                     if key:
@@ -270,7 +277,7 @@ def run_discover_all() -> List[Tuple[SiteAdapter, List[JobListing]]]:
     """Run discovery in parallel for all adapters; return list of (adapter, jobs)."""
     adapters = _get_adapters()
     results: List[Tuple[SiteAdapter, List[JobListing]]] = []
-    with ThreadPoolExecutor(max_workers=min(12, len(adapters))) as ex:
+    with ThreadPoolExecutor(max_workers=max(1, min(DISCOVERY_CONCURRENCY, len(adapters)))) as ex:
         futures = {ex.submit(_discover_one, a): a for a in adapters}
         for fut in as_completed(futures):
             try:

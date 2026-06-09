@@ -3,11 +3,20 @@ import argparse
 import sys
 from datetime import datetime, timezone
 
-from src.config import ensure_dirs, CV_PATH, SMTP_USER, SMTP_PASSWORD, LOGS_DIR
-from src.runner import run_full, run_check_responses_only, run_discover_and_apply
+from src.config import ensure_dirs, CV_PATH, SMTP_USER, SMTP_PASSWORD, LOGS_DIR, validate_config
+from src.runner import run_full, run_check_responses_only
 from src.log import get_logger
 
 LOG = get_logger("main")
+
+
+def _log_config_issues(for_apply: bool) -> None:
+    """Log config errors/warnings up front so misconfiguration is obvious."""
+    report = validate_config(for_apply=for_apply)
+    for w in report["warnings"]:
+        LOG.warning("Config: %s", w)
+    for e in report["errors"]:
+        LOG.error("Config: %s", e)
 
 
 def _write_last_run(stats: dict) -> None:
@@ -97,11 +106,8 @@ def main() -> int:
         LOG.info("Total (matching, not expired): %s", total)
         return 0
 
-    # Startup checks
-    if not CV_PATH.exists():
-        LOG.warning("Warning: CV file not found at CV_PATH. Applications will be skipped.")
-    if not SMTP_USER or not SMTP_PASSWORD:
-        LOG.warning("Warning: SMTP_USER or SMTP_PASSWORD missing. Email applications will fail.")
+    # Startup checks (centralized, clear)
+    _log_config_issues(for_apply=True)
 
     LOG.info("Running: full (discover + apply + check responses)")
     stats = run_full()
