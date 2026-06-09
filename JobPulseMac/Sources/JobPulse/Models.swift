@@ -8,6 +8,7 @@ struct ActivityLine: Identifiable, Hashable {
     let id = UUID()
     let kind: Kind
     let text: String
+    let time = Date()
 }
 
 struct AppliedJob: Identifiable, Hashable {

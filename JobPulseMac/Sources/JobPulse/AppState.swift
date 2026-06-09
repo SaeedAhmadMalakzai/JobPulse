@@ -55,6 +55,10 @@ final class AppState: ObservableObject {
         runner.stop()
     }
 
+    func clearActivity() {
+        activity.removeAll()
+    }
+
     private func wireRunner() {
         runner.onState = { [weak self] state in
             guard let self else { return }

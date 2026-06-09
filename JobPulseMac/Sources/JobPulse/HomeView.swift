@@ -96,24 +96,21 @@ struct HomeView: View {
         }
     }
 
-    // MARK: live activity
+    // MARK: live console
     private var liveActivity: some View {
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
-            SectionTitle(text: "Activity", systemImage: "waveform")
-            Card(padding: Theme.Space.sm) {
-                if state.activity.isEmpty {
-                    HStack {
-                        Spacer()
-                        Text("No activity yet. Press Run to start.")
-                            .foregroundStyle(.tertiary).font(.callout)
-                            .padding(.vertical, Theme.Space.xl)
-                        Spacer()
-                    }
-                } else {
-                    ActivityList(lines: state.activity)
-                        .frame(height: 320)
+            HStack(spacing: 6) {
+                SectionTitle(text: "Console", systemImage: "terminal")
+                Spacer()
+                if !state.activity.isEmpty {
+                    Text("\(state.activity.count) lines")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.tertiary)
                 }
             }
+            ConsoleView(lines: state.activity, running: state.isBusy,
+                        onClear: { state.clearActivity() })
+                .frame(minHeight: 360, maxHeight: 460)
         }
     }
 }
@@ -149,49 +146,3 @@ struct ReadinessItem: View {
     }
 }
 
-struct ActivityList: View {
-    let lines: [ActivityLine]
-    var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 1) {
-                    ForEach(lines) { line in
-                        Text(line.text)
-                            .font(.system(.callout, design: .monospaced))
-                            .foregroundStyle(color(for: line.kind))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 8).padding(.vertical, 3)
-                            .background(bg(for: line.kind), in: RoundedRectangle(cornerRadius: 5))
-                            .textSelection(.enabled)
-                            .id(line.id)
-                    }
-                }
-                .padding(4)
-            }
-            .onChange(of: lines.count) { _, _ in
-                if let last = lines.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
-            }
-        }
-    }
-
-    private func color(for kind: ActivityLine.Kind) -> Color {
-        switch kind {
-        case .applied, .success: return Theme.Status.success
-        case .skipped: return .orange
-        case .warning: return Theme.Status.warning
-        case .error: return Theme.Status.error
-        case .discovery: return Theme.Status.info
-        case .muted: return .secondary
-        case .info: return .primary
-        }
-    }
-
-    private func bg(for kind: ActivityLine.Kind) -> Color {
-        switch kind {
-        case .applied, .success: return Theme.Status.success.opacity(0.10)
-        case .skipped, .warning: return Theme.Status.warning.opacity(0.08)
-        case .error: return Theme.Status.error.opacity(0.10)
-        default: return .clear
-        }
-    }
-}
